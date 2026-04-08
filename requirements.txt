@@ -1,0 +1,31 @@
+# AI-assisted Audit Review System v2 — dependencies
+
+# LLM & embeddings
+ollama>=0.3.0
+sentence-transformers>=3.0.0
+torchvision>=0.17.0
+
+# Vector database
+chromadb>=0.5.0
+
+# Russian morphological analysis
+pymorphy2>=0.9.1
+pymorphy2-dicts-ru>=2.4.393442.3475763
+
+# Document processing
+python-docx>=1.1.0
+pdfplumber>=0.11.0
+
+# Web UI
+streamlit>=1.36.0
+pandas>=2.0.0
+
+# Utilities
+tqdm>=4.66.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Optional: improved PDF parsing
+# PyPDF2>=3.0.0

@@ -1,0 +1,27 @@
+---
+description: Rules for working with the main pipeline and module logic
+globs: ["act_pipeline.py", "act_preprocessor.py", "checklist_builder.py", "verifier.py", "violation_normalizer.py", "formulation_improver.py", "comparison_engine.py"]
+alwaysApply: false
+---
+
+# Pipeline Rules
+
+## Architecture constraints
+- act_pipeline.py is the ONLY entry point. Never call sub-modules directly from app.py
+- Pipeline steps execute in strict order: preprocess → normalize → retrieve → evaluate → improve → build
+- Never skip retrieval step even if results are empty — empty context must still be passed downstream
+
+## Data models
+- Always use dataclasses from models.py — never pass raw dicts between pipeline steps
+- ViolationContext is the central carrier object — all steps read from and write to it
+- ChecklistItem is the final output — only checklist_builder.py creates it
+
+## Error handling rules
+- Every pipeline step must catch its own exceptions and log them — never let one violation crash the full batch
+- If LLM returns unparseable response → log raw response + fall back to default values from config.py
+- If retrieval returns 0 results → continue pipeline, set similarity score to 0.0
+
+## What NOT to do
+- Do not add new global state — pipeline_stats is already a known thread-safety problem
+- Do not call Ollama directly — always go through rag_pipeline.py
+- Do not hardcode thresholds — always read from config.py

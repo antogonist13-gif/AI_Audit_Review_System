@@ -1,0 +1,8 @@
+You are working on an AI-assisted Audit Review System for Russian audit acts.
+
+Core entry point: act_pipeline.py
+Key files: prompts.py, config.py, models.py, violation_evaluator.py, act_retrieval.py
+
+Always read models.py before suggesting data structure changes.
+Always read config.py before suggesting threshold changes.
+Always read prompts.py before suggesting LLM prompt changes.

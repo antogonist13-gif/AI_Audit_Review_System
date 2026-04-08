@@ -1,0 +1,24 @@
+---
+description: Rules for working with LLM prompts and response parsers
+globs: ["prompts.py", "violation_evaluator.py", "formulation_improver.py", "rag_pipeline.py"]
+alwaysApply: false
+---
+
+# Prompt Engineering Rules
+
+## Prompt structure (required for all 3 evaluators)
+Every prompt must have these sections in order:
+1. Role definition (one sentence, specific)
+2. Task description (what to evaluate and why)
+3. Input block (clearly labeled, e.g. ### НАРУШЕНИЕ:)
+4. Few-shot examples (minimum 1 good + 1 bad example)
+5. Output format (explicit JSON schema with field names and types)
+6. Strict instruction: "Respond ONLY with JSON. No explanation. No markdown."
+
+## Output format rules
+- All LLM outputs must be valid JSON
+- Every JSON response must include a "score" field (float 0.0–1.0)
+- Every JSON response must include a "reasoning" field (string, max 2 sentences)
+- Parser functions in prompts.py must handle: missing fields, wrong types, empty string
+
+## Few-shot example format

@@ -1,0 +1,39 @@
+---
+description: Rules for writing and running tests
+globs: ["tests/*.py", "tests/fixtures/*"]
+alwaysApply: false
+---
+
+# Testing Rules
+
+## Test structure
+- Unit tests: mock ALL external calls (Ollama, ChromaDB, BM25)
+- Integration tests: use fixtures from tests/fixtures/ — never real documents
+- Every new pipeline step must have a corresponding test file
+
+## Fixture rules
+- Minimal valid Violation object must always be available as fixture
+- Provide at least 2 fixture documents: well-structured DOCX + malformed DOCX
+- ViolationContext fixture must cover: empty retrieval results + non-empty results
+
+## What to always test
+- Parser functions in prompts.py: valid JSON, missing fields, empty string, wrong type
+- Pipeline steps with empty retrieval results (most common failure mode)
+- Threshold boundary values from config.py (score exactly at threshold)
+
+## Mock pattern (use this consistently)
+```python
+from unittest.mock import patch, MagicMock
+
+@patch("rag_pipeline.OllamaClient")
+def test_evaluator(mock_ollama):
+    mock_ollama.return_value.generate.return_value = (
+        '{"score": 0.75, "reasoning": "test"}'
+    )
+    # test code here
+```
+
+## What NOT to do
+- Do not call real Ollama in unit tests — tests must run without Ollama running
+- Do not use real ChromaDB collections in unit tests
+- Do not test implementation details — test inputs and outputs of each step

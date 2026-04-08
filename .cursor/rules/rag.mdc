@@ -1,0 +1,29 @@
+---
+description: Rules for working with ChromaDB, BM25 and retrieval logic
+globs: ["act_retrieval.py", "multi_indexer.py", "embeddings.py", "bm25_cache.py"]
+alwaysApply: false
+---
+
+# RAG & Retrieval Rules
+
+## Retrieval is called exactly once per violation
+- act_retrieval.py is called once in act_pipeline.py — never call it inside evaluators
+- Results are stored in ViolationContext and reused by all downstream steps
+
+## Hybrid scoring formula (do not change weights without updating config.py)
+final_score = 0.5 × cosine + 0.3 × BM25 + 0.2 × law_boost
+
+## Empty collection handling
+- If all 3 collections are empty → return ViolationContext with empty lists, score=0.0
+- Never raise exception on empty retrieval — log warning instead
+- Downstream steps must check: if not context.retrieved_norms → handle gracefully
+
+## Indexing rules
+- Always index to all 3 collections: norms, typical_violations, historical_checklists
+- Minimum document metadata fields: source, date, law_ref, collection_name
+- Re-indexing must be idempotent — use document ID as ChromaDB ID to avoid duplicates
+
+## What NOT to do
+- Do not embed text longer than 512 tokens — chunk first
+- Do not store raw PDF bytes in ChromaDB — store extracted text only
+- Do not bypass BM25 cache — always use bm25_cache.py interface

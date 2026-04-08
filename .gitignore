@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Data & models
+data/db/
+*.chroma
+*.sqlite3
+*.bin
+*.pt
+
+# LLM cache
+llm_cache/
+*.cache.json
+
+# Logs & output
+*.log
+*.tmp
+report_output/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db

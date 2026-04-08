@@ -27,4 +27,6 @@ report_output/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.dbdata/db/
+*.sqlite3
+*.bin

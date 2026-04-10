@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
+from llm_response_parser import parse_llm_score
+
 # ---------------------------------------------------------------------------
 # Score word mapping
 # ---------------------------------------------------------------------------
@@ -72,22 +74,35 @@ def _parse_score(text: str) -> float:
 # ---------------------------------------------------------------------------
 
 
+def parse_evidence(raw: str) -> dict:
+    return parse_llm_score(raw, caller="evidence")
+
+
+def parse_legal(raw: str) -> dict:
+    return parse_llm_score(raw, caller="legal")
+
+
+def parse_actionability(raw: str) -> dict:
+    return parse_llm_score(raw, caller="actionability")
+
+
 def parse_scored_response(text: str) -> Dict[str, str]:
     """Parse a scored LLM evaluation response.
 
     Returns a dict with keys: 'score' (str float), 'comment'.
     Falls back gracefully — never raises.
     """
-    score = _parse_score(text)
+    d = parse_llm_score(text, caller="scored")
+    comment = d["reasoning"]
+    if comment in ("extracted_from_prose", "parse_error"):
+        comment_match = re.search(
+            r"(?:КОММЕНТАРИЙ|COMMENT|ОБОСНОВАНИЕ|ВЫВОД)[:\s]+(.+?)(?:\n|$)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        comment = comment_match.group(1).strip() if comment_match else text.strip()
 
-    comment_match = re.search(
-        r"(?:КОММЕНТАРИЙ|COMMENT|ОБОСНОВАНИЕ|ВЫВОД)[:\s]+(.+?)(?:\n|$)",
-        text,
-        re.IGNORECASE | re.DOTALL,
-    )
-    comment = comment_match.group(1).strip() if comment_match else text.strip()
-
-    return {"score": str(score), "comment": comment}
+    return {"score": str(d["score"]), "comment": comment}
 
 
 def parse_extraction_blocks(text: str) -> List[Dict[str, str]]:

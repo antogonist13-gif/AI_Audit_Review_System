@@ -35,17 +35,22 @@ from src.svk_analytics.summaries import (
 
 st.set_page_config(page_title="СВК Analytics", layout="wide")
 
-# Увеличивайте при изменении выходных колонок enrich_with_metrics (сброс кэша Streamlit).
-SCORING_CACHE_VERSION = 2
-
 
 @st.cache_data(show_spinner=False)
-def load_and_score(path: str, year: int | None, cache_version: int = SCORING_CACHE_VERSION):
+def load_canonical_report(path: str, file_mtime: float | None = None):
+    """Кэшируется только чтение и нормализация отчёта; расчёт метрик — всегда свежий."""
     columns_config = load_yaml("config/columns.yml")
-    scoring_config = load_yaml("config/scoring.yml")
     raw = load_report(path)
     resolved, resolution_report = resolve_columns(raw, columns_config)
     canonical = build_canonical_frame(raw, resolved)
+    return canonical, resolution_report
+
+
+def load_and_score(path: str, year: int | None):
+    p = Path(path)
+    mtime = p.stat().st_mtime if p.exists() else None
+    canonical, resolution_report = load_canonical_report(path, mtime)
+    scoring_config = load_yaml("config/scoring.yml")
     enriched = enrich_with_metrics(canonical, scoring_config, year=year)
     return enriched, scoring_config, resolution_report
 
@@ -101,7 +106,7 @@ with st.sidebar:
             st.info(f"Используется файл из data/raw: {latest.name}")
         else:
             st.warning("Положите файл в data/raw или загрузите его выше.")
-    if st.button("Обновить расчёт", help="Очистить кэш и пересчитать метрики"):
+    if st.button("Обновить данные", help="Очистить кэш загрузки отчёта и перечитать файл"):
         st.cache_data.clear()
         st.rerun()
 
@@ -143,6 +148,11 @@ except Exception as e:
     st.stop()
 
 with st.sidebar:
+    if "form_vs_peer" in df.columns:
+        st.caption("Расчёт: peer-метрики ✓")
+    else:
+        st.caption("Расчёт: peer-метрики ✗ — проверьте ветку `feature/peer-metrics-recommended-form`")
+
     st.header("Фильтры")
     filtered = df.copy()
     for col, label in [("federal_district", "Федеральный округ"), ("region", "Регион"), ("org_type_classified", "Тип организации"), ("risk_group", "Группа риска")]:
@@ -400,8 +410,8 @@ with tab4:
                 st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(
-            "Peer-метрики не найдены в данных. Нажмите **«Обновить расчёт»** в боковой панели "
-            "или перезагрузите страницу (R), чтобы пересчитать отчёт с новыми показателями."
+            "Peer-метрики не найдены. Перезапустите приложение: "
+            "`streamlit run app.py` из ветки `feature/peer-metrics-recommended-form`."
         )
 
     st.markdown("### Отклонение от расчётно рекомендуемой формы СВК")

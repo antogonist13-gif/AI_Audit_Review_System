@@ -4,5 +4,6 @@ numpy
 plotly
 PyYAML
 openpyxl
+lxml
 beautifulsoup4
 html5lib

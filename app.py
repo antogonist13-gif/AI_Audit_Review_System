@@ -35,9 +35,12 @@ from src.svk_analytics.summaries import (
 
 st.set_page_config(page_title="СВК Analytics", layout="wide")
 
+# Увеличивайте при изменении выходных колонок enrich_with_metrics (сброс кэша Streamlit).
+SCORING_CACHE_VERSION = 2
+
 
 @st.cache_data(show_spinner=False)
-def load_and_score(path: str, year: int | None):
+def load_and_score(path: str, year: int | None, cache_version: int = SCORING_CACHE_VERSION):
     columns_config = load_yaml("config/columns.yml")
     scoring_config = load_yaml("config/scoring.yml")
     raw = load_report(path)
@@ -98,6 +101,9 @@ with st.sidebar:
             st.info(f"Используется файл из data/raw: {latest.name}")
         else:
             st.warning("Положите файл в data/raw или загрузите его выше.")
+    if st.button("Обновить расчёт", help="Очистить кэш и пересчитать метрики"):
+        st.cache_data.clear()
+        st.rerun()
 
 if not input_path:
     st.info("👋 Добро пожаловать в СВК Analytics!")
@@ -335,45 +341,42 @@ with tab4:
         "Сравнение с медианой формы СВК и доли покрытия направлений среди организаций "
         "с похожим профилем нагрузки (при нехватке аналогов — более грубая группировка)."
     )
-    peer_cols = [
-        "org_name", "svk_form_level", "peer_form_median", "form_vs_peer",
-        "coverage_share_active", "peer_coverage_median", "coverage_vs_peer",
-        "peer_group_size", "peer_group_level", "risk_group",
-    ]
-    if all(c in filtered.columns for c in peer_cols):
-        peer_plot = filtered[filtered["peer_group_size"] >= 5].copy()
-        if not peer_plot.empty:
-            form_peer_counts = (
-                peer_plot.groupby("form_vs_peer", dropna=False)
-                .size()
-                .reset_index(name="orgs")
-                .sort_values("form_vs_peer")
-            )
-            fig = px.bar(
-                form_peer_counts,
-                x="form_vs_peer",
-                y="orgs",
-                text="orgs",
-                title="Распределение отклонения формы от медианы аналогов",
-            )
-            fig.update_layout(
-                xaxis_title="Фактическая форма − медиана аналогов",
-                yaxis_title="Количество организаций",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    if "form_vs_peer" in filtered.columns:
+        peer_plot = filtered.copy()
+        form_peer_counts = (
+            peer_plot.groupby("form_vs_peer", dropna=False)
+            .size()
+            .reset_index(name="orgs")
+            .sort_values("form_vs_peer")
+        )
+        form_peer_counts["form_vs_peer"] = form_peer_counts["form_vs_peer"].astype(float)
+        fig = px.bar(
+            form_peer_counts,
+            x="form_vs_peer",
+            y="orgs",
+            text="orgs",
+            title="Распределение отклонения формы от медианы аналогов",
+        )
+        fig.update_layout(
+            xaxis_title="Фактическая форма − медиана аналогов",
+            yaxis_title="Количество организаций",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
+        if "peer_form_median" in peer_plot.columns:
             fig = px.scatter(
                 peer_plot,
                 x="peer_form_median",
                 y="svk_form_level",
                 color="risk_group",
-                size="peer_group_size",
+                size="peer_group_size" if "peer_group_size" in peer_plot.columns else None,
                 hover_name="org_name",
                 title="Фактическая форма vs медиана аналогов с аналогичной нагрузкой",
             )
             fig.update_layout(xaxis_title="Медиана формы у аналогов", yaxis_title="Фактическая форма")
             st.plotly_chart(fig, use_container_width=True)
 
+        if "coverage_vs_peer" in peer_plot.columns:
             cov_peer = peer_plot.dropna(subset=["coverage_vs_peer"])
             if not cov_peer.empty:
                 cov_counts = (
@@ -395,8 +398,11 @@ with tab4:
                     yaxis_title="Количество организаций",
                 )
                 st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Недостаточно организаций с группой аналогов ≥ 5 для построения диаграмм.")
+    else:
+        st.warning(
+            "Peer-метрики не найдены в данных. Нажмите **«Обновить расчёт»** в боковой панели "
+            "или перезагрузите страницу (R), чтобы пересчитать отчёт с новыми показателями."
+        )
 
     st.markdown("### Отклонение от расчётно рекомендуемой формы СВК")
     gap_counts = filtered.groupby("form_gap", dropna=False).size().reset_index(name="orgs").sort_values("form_gap")

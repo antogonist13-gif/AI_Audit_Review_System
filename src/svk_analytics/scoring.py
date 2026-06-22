@@ -78,8 +78,79 @@ def classify_org_type(org_type_value: str) -> str:
     return "Другие"
 
 
+def add_peer_benchmarks(
+    out: pd.DataFrame,
+    direction_keys: list[str],
+    scoring_config: dict[str, Any],
+) -> pd.DataFrame:
+    """Compare each organization to peers with a similar load profile."""
+    peer_cfg = scoring_config.get("peer_benchmark", {})
+    min_size = int(peer_cfg.get("min_group_size", 5))
+
+    level_cols = [f"{k}_load_level" for k in direction_keys]
+    count_col = "org_name" if "org_name" in out.columns else out.columns[0]
+
+    out["load_profile"] = out[level_cols].astype(str).agg("-".join, axis=1)
+    peer_key_max_act = (
+        out["max_direction_load_level"].astype(str) + "_act" + out["active_directions_count"].astype(str)
+    )
+    peer_key_max = "max_" + out["max_direction_load_level"].astype(str)
+
+    def _peer_stats(keys: pd.Series) -> pd.DataFrame:
+        tmp = out.assign(_peer_key=keys)
+        return (
+            tmp.groupby("_peer_key", dropna=False)
+            .agg(
+                peer_group_size=(count_col, "count"),
+                peer_form_median=("svk_form_level", "median"),
+                peer_coverage_median=("coverage_share_active", "median"),
+            )
+        )
+
+    profile_stats = _peer_stats(out["load_profile"])
+    max_act_stats = _peer_stats(peer_key_max_act)
+    max_stats = _peer_stats(peer_key_max)
+
+    peer_keys: list[str] = []
+    peer_levels: list[str] = []
+    peer_sizes: list[int] = []
+    peer_form_medians: list[float] = []
+    peer_cov_medians: list[float] = []
+
+    for i in range(len(out)):
+        profile = out["load_profile"].iloc[i]
+        max_act = peer_key_max_act.iloc[i]
+        max_key = peer_key_max.iloc[i]
+
+        if profile_stats.loc[profile, "peer_group_size"] >= min_size:
+            stats = profile_stats.loc[profile]
+            level, key = "profile", profile
+        elif max_act_stats.loc[max_act, "peer_group_size"] >= min_size:
+            stats = max_act_stats.loc[max_act]
+            level, key = "max_act", max_act
+        else:
+            stats = max_stats.loc[max_key]
+            level, key = "max", max_key
+
+        peer_keys.append(str(key))
+        peer_levels.append(level)
+        peer_sizes.append(int(stats["peer_group_size"]))
+        peer_form_medians.append(float(stats["peer_form_median"]))
+        cov = stats["peer_coverage_median"]
+        peer_cov_medians.append(float(cov) if pd.notna(cov) else np.nan)
+
+    out["peer_group_key"] = peer_keys
+    out["peer_group_level"] = peer_levels
+    out["peer_group_size"] = peer_sizes
+    out["peer_form_median"] = peer_form_medians
+    out["peer_coverage_median"] = peer_cov_medians
+    out["form_vs_peer"] = out["svk_form_level"] - out["peer_form_median"]
+    out["coverage_vs_peer"] = out["coverage_share_active"] - out["peer_coverage_median"]
+    return out
+
+
 def enrich_with_metrics(df: pd.DataFrame, scoring_config: dict[str, Any], year: int | None = None) -> pd.DataFrame:
-    """Calculate coverage, load levels, required form and risk groups."""
+    """Calculate coverage, load levels, recommended form, peer benchmarks and risk groups."""
     out = df.copy()
     if year is not None:
         out["analysis_year"] = year
@@ -161,18 +232,20 @@ def enrich_with_metrics(df: pd.DataFrame, scoring_config: dict[str, Any], year: 
     out["max_uncovered_load"] = out[uncovered_load_cols].max(axis=1)
     out["max_direction_load_level"] = out[level_cols].max(axis=1)
 
-    required = out["max_direction_load_level"].copy()
+    recommended = out["max_direction_load_level"].copy()
     bump_cfg = scoring_config.get("complexity_bump", {})
     if bump_cfg.get("enabled", True):
         min_count = int(bump_cfg.get("min_directions_count", 3))
         min_level = int(bump_cfg.get("min_direction_level", 2))
         bump_by = int(bump_cfg.get("bump_by", 1))
         complex_count = (out[level_cols] >= min_level).sum(axis=1)
-        required = required + np.where(complex_count >= min_count, bump_by, 0)
+        recommended = recommended + np.where(complex_count >= min_count, bump_by, 0)
 
-    out["required_form_level"] = required.clip(lower=0, upper=4).astype(int)
-    out["required_form_name"] = out["required_form_level"].map(_form_name)
-    out["form_gap"] = out["svk_form_level"] - out["required_form_level"]
+    out["recommended_form_level"] = recommended.clip(lower=0, upper=4).astype(int)
+    out["recommended_form_name"] = out["recommended_form_level"].map(_form_name)
+    out["form_gap"] = out["svk_form_level"] - out["recommended_form_level"]
+
+    out = add_peer_benchmarks(out, direction_keys, scoring_config)
 
     out["risk_group"] = np.select(
         [

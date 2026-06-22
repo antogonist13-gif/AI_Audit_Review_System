@@ -543,7 +543,8 @@ def top_risk_organizations(df: pd.DataFrame, limit: int = 50) -> pd.DataFrame:
     display_cols = [
         "org_name", "org_type", "federal_district", "region", "risk_group",
         "coverage_share_active", "uncovered_load_sum", "max_uncovered_load",
-        "svk_form_name", "required_form_name", "form_gap",
+        "svk_form_name", "recommended_form_name", "form_gap",
+        "peer_form_median", "form_vs_peer", "coverage_vs_peer", "peer_group_size",
         "fhd_load_level", "procurement_load_level", "property_load_level", "project_load_level",
         "fhd_covered", "procurement_covered", "property_covered", "project_covered",
         "data_quality_flags",

@@ -187,20 +187,34 @@ async def get_directions(year: int = Query(2025)):
 
 @app.get("/api/form-gap")
 async def get_form_gap(year: int = Query(2025)):
-    """Получить данные о разрыве формы СВК"""
+    """Получить данные о соразмерности формы СВК (peer + рекомендуемая форма)"""
     data = load_data(year)
     df = data["df"]
     
     gap_counts = df.groupby("form_gap", dropna=False).size().reset_index(name="orgs")
     
     scatter_data = df[[
-        "org_name", "svk_form_level", "required_form_level", 
+        "org_name", "svk_form_level", "recommended_form_level",
         "max_direction_load_level", "coverage_share_active", "risk_group"
     ]].to_dict(orient="records")
+
+    peer_cols = [
+        "org_name", "svk_form_level", "peer_form_median", "form_vs_peer",
+        "coverage_share_active", "peer_coverage_median", "coverage_vs_peer",
+        "peer_group_size", "peer_group_level", "risk_group",
+    ]
+    peer_scatter = df[[c for c in peer_cols if c in df.columns]].to_dict(orient="records")
+
+    form_peer_counts = (
+        df.groupby("form_vs_peer", dropna=False).size().reset_index(name="orgs")
+        if "form_vs_peer" in df.columns else pd.DataFrame()
+    )
     
     by_district = by_dimension_summary(df, "federal_district")
     
     return {
+        "peer_distribution": form_peer_counts.to_dict(orient="records") if not form_peer_counts.empty else [],
+        "peer_scatter_data": peer_scatter,
         "gap_distribution": gap_counts.to_dict(orient="records"),
         "scatter_data": scatter_data,
         "by_district": by_district.to_dict(orient="records"),

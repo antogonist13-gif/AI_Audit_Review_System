@@ -330,24 +330,92 @@ with tab3:
         st.dataframe(dsum, use_container_width=True)
 
 with tab4:
-    st.markdown("### Разрыв между расчетно необходимой и фактической формой СВК")
+    st.markdown("### Отклонение от организаций с аналогичной нагрузкой")
+    st.caption(
+        "Сравнение с медианой формы СВК и доли покрытия направлений среди организаций "
+        "с похожим профилем нагрузки (при нехватке аналогов — более грубая группировка)."
+    )
+    peer_cols = [
+        "org_name", "svk_form_level", "peer_form_median", "form_vs_peer",
+        "coverage_share_active", "peer_coverage_median", "coverage_vs_peer",
+        "peer_group_size", "peer_group_level", "risk_group",
+    ]
+    if all(c in filtered.columns for c in peer_cols):
+        peer_plot = filtered[filtered["peer_group_size"] >= 5].copy()
+        if not peer_plot.empty:
+            form_peer_counts = (
+                peer_plot.groupby("form_vs_peer", dropna=False)
+                .size()
+                .reset_index(name="orgs")
+                .sort_values("form_vs_peer")
+            )
+            fig = px.bar(
+                form_peer_counts,
+                x="form_vs_peer",
+                y="orgs",
+                text="orgs",
+                title="Распределение отклонения формы от медианы аналогов",
+            )
+            fig.update_layout(
+                xaxis_title="Фактическая форма − медиана аналогов",
+                yaxis_title="Количество организаций",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            fig = px.scatter(
+                peer_plot,
+                x="peer_form_median",
+                y="svk_form_level",
+                color="risk_group",
+                size="peer_group_size",
+                hover_name="org_name",
+                title="Фактическая форма vs медиана аналогов с аналогичной нагрузкой",
+            )
+            fig.update_layout(xaxis_title="Медиана формы у аналогов", yaxis_title="Фактическая форма")
+            st.plotly_chart(fig, use_container_width=True)
+
+            cov_peer = peer_plot.dropna(subset=["coverage_vs_peer"])
+            if not cov_peer.empty:
+                cov_counts = (
+                    cov_peer.assign(coverage_vs_peer_round=cov_peer["coverage_vs_peer"].round(2))
+                    .groupby("coverage_vs_peer_round", dropna=False)
+                    .size()
+                    .reset_index(name="orgs")
+                    .sort_values("coverage_vs_peer_round")
+                )
+                fig = px.bar(
+                    cov_counts,
+                    x="coverage_vs_peer_round",
+                    y="orgs",
+                    text="orgs",
+                    title="Распределение отклонения покрытия направлений от медианы аналогов",
+                )
+                fig.update_layout(
+                    xaxis_title="Доля покрытия − медиана аналогов",
+                    yaxis_title="Количество организаций",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Недостаточно организаций с группой аналогов ≥ 5 для построения диаграмм.")
+
+    st.markdown("### Отклонение от расчётно рекомендуемой формы СВК")
     gap_counts = filtered.groupby("form_gap", dropna=False).size().reset_index(name="orgs").sort_values("form_gap")
-    fig = px.bar(gap_counts, x="form_gap", y="orgs", text="orgs", title="Распределение разрыва формы СВК")
-    fig.update_layout(xaxis_title="Фактическая форма − требуемая форма", yaxis_title="Количество организаций")
+    fig = px.bar(gap_counts, x="form_gap", y="orgs", text="orgs", title="Распределение отклонения от рекомендуемой формы")
+    fig.update_layout(xaxis_title="Фактическая форма − рекомендуемая форма", yaxis_title="Количество организаций")
     st.plotly_chart(fig, use_container_width=True)
 
-    scatter_cols = ["org_name", "svk_form_level", "required_form_level", "max_direction_load_level", "coverage_share_active", "risk_group"]
+    scatter_cols = ["org_name", "svk_form_level", "recommended_form_level", "max_direction_load_level", "coverage_share_active", "risk_group"]
     if all(c in filtered.columns for c in scatter_cols):
         fig = px.scatter(
             filtered,
-            x="required_form_level",
+            x="recommended_form_level",
             y="svk_form_level",
             color="risk_group",
             size="max_direction_load_level",
             hover_name="org_name",
-            title="Фактическая форма СВК vs требуемая форма",
+            title="Фактическая форма СВК vs расчётно рекомендуемая форма",
         )
-        fig.update_layout(xaxis_title="Требуемая форма", yaxis_title="Фактическая форма")
+        fig.update_layout(xaxis_title="Рекомендуемая форма", yaxis_title="Фактическая форма")
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Разрез по федеральным округам")

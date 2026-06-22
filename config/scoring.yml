@@ -17,6 +17,10 @@ complexity_bump:
   min_direction_level: 2
   bump_by: 1
 
+peer_benchmark:
+  # Минимальный размер группы аналогов; при нехватке — откат к более грубой группировке.
+  min_group_size: 5
+
 forms:
   form_responsible_person:
     level: 1

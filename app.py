@@ -36,6 +36,67 @@ from src.svk_analytics.summaries import (
 st.set_page_config(page_title="СВК Analytics", layout="wide")
 
 
+def apply_custom_css(dark_mode: bool = True):
+    """Apply custom CSS for dark/light theme."""
+    if dark_mode:
+        css = """
+        <style>
+        /* Dark theme */
+        :root {
+            --background-color: #0E1117;
+            --secondary-bg-color: #262730;
+            --text-color: #FAFAFA;
+            --border-color: #3D3D3D;
+        }
+        
+        .stApp {
+            background-color: var(--background-color);
+            color: var(--text-color);
+        }
+        
+        .stSidebar {
+            background-color: var(--secondary-bg-color);
+        }
+        
+        .stMarkdown, .stText {
+            color: var(--text-color);
+        }
+        
+        div[data-testid="stMetricValue"] {
+            color: var(--text-color);
+        }
+        
+        .stDataFrame {
+            border-color: var(--border-color);
+        }
+        
+        /* Headers */
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--text-color) !important;
+        }
+        
+        /* Info/Warning boxes */
+        .stInfo, .stWarning, .stSuccess {
+            background-color: var(--secondary-bg-color);
+            color: var(--text-color);
+        }
+        </style>
+        """
+    else:
+        css = """
+        <style>
+        /* Light theme - default Streamlit */
+        </style>
+        """
+    
+    st.markdown(css, unsafe_allow_html=True)
+
+
+# Initialize theme in session state
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = True
+
+
 @st.cache_data(show_spinner=False)
 def load_and_score(path: str, year: int | None):
     columns_config = load_yaml("config/columns.yml")
@@ -76,11 +137,24 @@ def metric_card(label: str, value):
     st.metric(label, value)
 
 
+# Apply theme
+apply_custom_css(st.session_state.dark_mode)
+
 st.title("СВК Analytics: мониторинг внутреннего контроля")
 st.caption("Интерактивный дашборд по ежегодному сводному отчету")
 
 with st.sidebar:
-    st.header("Источник данных")
+    # Theme toggle
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.header("Источник данных")
+    with col2:
+        # Theme toggle button
+        theme_icon = "🌙" if st.session_state.dark_mode else "☀️"
+        if st.button(theme_icon, help="Переключить тему", use_container_width=False):
+            st.session_state.dark_mode = not st.session_state.dark_mode
+            st.rerun()
+    
     year = st.number_input("Год анализа", min_value=2020, max_value=2100, value=2025, step=1)
     uploaded = st.file_uploader("Загрузите годовой отчет", type=["xls", "xlsx", "html", "htm"])
 

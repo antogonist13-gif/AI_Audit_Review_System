@@ -36,65 +36,148 @@ from src.svk_analytics.summaries import (
 st.set_page_config(page_title="СВК Analytics", layout="wide")
 
 
-def apply_custom_css(dark_mode: bool = True):
-    """Apply custom CSS for dark/light theme."""
-    if dark_mode:
-        css = """
+# Initialize theme in session state
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = True
+
+
+def toggle_theme():
+    """Toggle theme and apply CSS dynamically."""
+    st.session_state.dark_mode = not st.session_state.dark_mode
+
+
+def get_theme_css():
+    """Get CSS based on current theme."""
+    if st.session_state.dark_mode:
+        return """
         <style>
-        /* Dark theme */
-        :root {
-            --background-color: #0E1117;
-            --secondary-bg-color: #262730;
-            --text-color: #FAFAFA;
-            --border-color: #3D3D3D;
-        }
-        
+        /* Force dark theme colors */
         .stApp {
-            background-color: var(--background-color);
-            color: var(--text-color);
+            background-color: #0E1117;
+            color: #FAFAFA;
         }
         
         .stSidebar {
-            background-color: var(--secondary-bg-color);
+            background-color: #262730;
         }
         
-        .stMarkdown, .stText {
-            color: var(--text-color);
+        section[data-testid="stSidebar"] {
+            background-color: #262730;
         }
         
-        div[data-testid="stMetricValue"] {
-            color: var(--text-color);
-        }
-        
-        .stDataFrame {
-            border-color: var(--border-color);
+        /* All text */
+        .stMarkdown, .stText, p, span, div {
+            color: #FAFAFA !important;
         }
         
         /* Headers */
         h1, h2, h3, h4, h5, h6 {
-            color: var(--text-color) !important;
+            color: #FAFAFA !important;
         }
         
-        /* Info/Warning boxes */
-        .stInfo, .stWarning, .stSuccess {
-            background-color: var(--secondary-bg-color);
-            color: var(--text-color);
+        /* Metrics */
+        [data-testid="stMetricValue"] {
+            color: #FAFAFA !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            color: #B0B0B0 !important;
+        }
+        
+        /* Input widgets */
+        .stTextInput input, .stNumberInput input, .stSelectbox select {
+            background-color: #262730 !important;
+            color: #FAFAFA !important;
+            border-color: #3D3D3D !important;
+        }
+        
+        /* DataFrames */
+        .dataframe {
+            background-color: #1E1E1E !important;
+            color: #FAFAFA !important;
+        }
+        
+        /* Buttons */
+        .stButton button {
+            background-color: #FF4B4B;
+            color: white;
+        }
+        
+        /* Info boxes */
+        .stAlert {
+            background-color: #262730 !important;
+            color: #FAFAFA !important;
+        }
+        
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            background-color: #262730;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            color: #B0B0B0;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            color: #FAFAFA !important;
         }
         </style>
         """
     else:
-        css = """
+        return """
         <style>
-        /* Light theme - default Streamlit */
+        /* Force light theme colors */
+        .stApp {
+            background-color: #FFFFFF;
+            color: #31333F;
+        }
+        
+        .stSidebar {
+            background-color: #F0F2F6;
+        }
+        
+        section[data-testid="stSidebar"] {
+            background-color: #F0F2F6;
+        }
+        
+        /* All text */
+        .stMarkdown, .stText, p, span, div {
+            color: #31333F !important;
+        }
+        
+        /* Headers */
+        h1, h2, h3, h4, h5, h6 {
+            color: #31333F !important;
+        }
+        
+        /* Metrics */
+        [data-testid="stMetricValue"] {
+            color: #31333F !important;
+        }
+        
+        /* Input widgets */
+        .stTextInput input, .stNumberInput input, .stSelectbox select {
+            background-color: #FFFFFF !important;
+            color: #31333F !important;
+        }
+        
+        /* DataFrames */
+        .dataframe {
+            background-color: #FFFFFF !important;
+            color: #31333F !important;
+        }
+        
+        /* Buttons */
+        .stButton button {
+            background-color: #FF4B4B;
+            color: white;
+        }
         </style>
         """
-    
-    st.markdown(css, unsafe_allow_html=True)
 
 
-# Initialize theme in session state
-if 'dark_mode' not in st.session_state:
-    st.session_state.dark_mode = True
+# Apply theme CSS at the top
+st.markdown(get_theme_css(), unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -137,9 +220,6 @@ def metric_card(label: str, value):
     st.metric(label, value)
 
 
-# Apply theme
-apply_custom_css(st.session_state.dark_mode)
-
 st.title("СВК Analytics: мониторинг внутреннего контроля")
 st.caption("Интерактивный дашборд по ежегодному сводному отчету")
 
@@ -150,9 +230,10 @@ with st.sidebar:
         st.header("Источник данных")
     with col2:
         # Theme toggle button
-        theme_icon = "🌙" if st.session_state.dark_mode else "☀️"
-        if st.button(theme_icon, help="Переключить тему", use_container_width=False):
-            st.session_state.dark_mode = not st.session_state.dark_mode
+        theme_icon = "☀️" if st.session_state.dark_mode else "🌙"
+        theme_help = "Светлая тема" if st.session_state.dark_mode else "Темная тема"
+        if st.button(theme_icon, help=theme_help, key="theme_toggle"):
+            toggle_theme()
             st.rerun()
     
     year = st.number_input("Год анализа", min_value=2020, max_value=2100, value=2025, step=1)

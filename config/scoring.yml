@@ -1,0 +1,70 @@
+# Настройки расчета нагрузки, покрытия и соответствия формы СВК.
+
+load_level_thresholds:
+  # Нагрузка считается через перцентиль: насколько организация крупнее других по выбранным показателям.
+  # 0 — нет активности
+  # 1 — активность есть, но не выше 75-го перцентиля
+  # 2 — выше 75-го, но не выше 90-го
+  # 3 — выше 90-го, но не выше 95-го
+  # 4 — выше 95-го перцентиля
+  level_1_max_percentile: 0.75
+  level_2_max_percentile: 0.90
+  level_3_max_percentile: 0.95
+
+complexity_bump:
+  enabled: true
+  min_directions_count: 3
+  min_direction_level: 2
+  bump_by: 1
+
+forms:
+  form_responsible_person:
+    level: 1
+    name: Уполномоченное должностное лицо
+  form_temporary_body:
+    level: 2
+    name: Временный коллегиальный орган / комиссия
+  form_permanent_body:
+    level: 3
+    name: Постоянно действующий коллегиальный орган
+  form_structural_unit:
+    level: 4
+    name: Уполномоченное структурное подразделение
+
+directions:
+  fhd:
+    name: Финансово-хозяйственная деятельность
+    cover_column: cover_fhd
+    metrics:
+      - cash_receipts
+      - cash_payments
+      - staff_avg
+      - fkhz_count
+  procurement:
+    name: Закупки
+    cover_column: cover_procurement
+    metrics:
+      - procurement_count
+      - procurement_amount
+  property:
+    name: Имущество
+    cover_column: cover_property
+    metrics:
+      - buildings_count
+      - buildings_area
+      - land_count
+      - land_area
+      - ocdi_count
+      - ocdi_value
+      - real_estate_ops_count
+      - real_estate_ops_area
+      - ocdi_ops_count
+      - ocdi_ops_value
+  project:
+    name: Проектная деятельность
+    cover_column: cover_project
+    metrics:
+      - project_count
+      - project_amount
+      - contracts_count
+      - contracts_amount

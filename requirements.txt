@@ -1,8 +1,9 @@
-pandas>=2.0
-numpy>=1.24
-streamlit>=1.35
-plotly>=5.20
-PyYAML>=6.0
-openpyxl>=3.1
-lxml>=5.0
-beautifulsoup4>=4.12
+pandas==2.2.2
+numpy==1.26.4
+streamlit==1.36.0
+plotly==5.22.0
+PyYAML==6.0.1
+openpyxl==3.1.2
+lxml==4.9.4
+beautifulsoup4==4.12.3
+html5lib==1.1

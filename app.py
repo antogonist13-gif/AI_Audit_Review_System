@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.svk_analytics.columns import build_canonical_frame, resolve_columns
 from src.svk_analytics.io import find_latest_raw_file, load_report, load_yaml
+from src.svk_analytics.report import build_docx, generate_narrative
 from src.svk_analytics.scoring import enrich_with_metrics
 from src.svk_analytics.summaries import (
     anomalies_table,
@@ -50,11 +51,13 @@ def load_canonical_report(path: str, file_mtime: float | None = None):
     return canonical, resolution_report
 
 
-def load_and_score(path: str, year: int | None):
+def load_and_score(path: str, year: int | None, min_group_size: int | None = None):
     p = Path(path)
     mtime = p.stat().st_mtime if p.exists() else None
     canonical, resolution_report = load_canonical_report(path, mtime)
     scoring_config = load_yaml("config/scoring.yml")
+    if min_group_size is not None:
+        scoring_config.setdefault("peer_benchmark", {})["min_group_size"] = min_group_size
     enriched = enrich_with_metrics(canonical, scoring_config, year=year)
     return enriched, scoring_config, resolution_report
 
@@ -114,6 +117,20 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+    st.markdown("---")
+    st.header("Параметры анализа")
+    peer_min_group_size = st.number_input(
+        "Мин. число организаций-аналогов",
+        min_value=3,
+        max_value=100,
+        value=5,
+        step=1,
+        help=(
+            "Минимальный размер группы аналогов для сравнения в разделе «Соразмерность формы». "
+            "При нехватке организаций применяется откат к более грубой группировке."
+        ),
+    )
+
 if not input_path:
     st.info("👋 Добро пожаловать в СВК Analytics!")
     st.markdown("""
@@ -146,7 +163,9 @@ if not input_path:
     st.stop()
 
 try:
-    df, scoring_config, resolution_report = load_and_score(input_path, int(year))
+    df, scoring_config, resolution_report = load_and_score(
+        input_path, int(year), min_group_size=int(peer_min_group_size)
+    )
 except Exception as e:
     st.error(f"Не удалось загрузить и обработать отчет: {e}")
     st.stop()
@@ -201,7 +220,7 @@ with col12:
     metric_card("Двойной риск", fmt_num(int(filtered["risk_group"].str.startswith("D.").sum())))
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Общая статистика",
     "Зрелость СВК",
     "Направления",
@@ -210,6 +229,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Качество данных",
     "Настройки колонок",
     "Распределение 3D",
+    "Проект отчета",
 ])
 
 with tab1:
@@ -353,8 +373,9 @@ with tab3:
 with tab4:
     st.markdown("### Отклонение от организаций с аналогичной нагрузкой")
     st.caption(
-        "Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
-        "(при нехватке аналогов — более грубая группировка). Отклонение — целые уровни формы."
+        f"Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
+        f"(мин. группа аналогов: {peer_min_group_size} орг.; при нехватке — более грубая группировка). "
+        "Отклонение — целые уровни формы."
     )
     if "form_vs_peer" in filtered.columns:
         peer_plot = filtered.copy()
@@ -724,3 +745,126 @@ with tab8:
                 mime="text/csv",
             )
             st.info(f"Найдено организаций с признаками аномалий: {len(anomaly_tab)}")
+
+with tab9:
+    st.markdown("## Проект отчёта о мониторинге СВК")
+    st.caption(
+        "Автоматически сформированный проект годового отчёта на основе загруженных данных. "
+        "Нарративные выводы генерируются по фактическим значениям показателей."
+    )
+
+    try:
+        ctx = generate_narrative(filtered, scoring_config, int(year))
+    except Exception as e:
+        st.error(f"Не удалось сформировать отчёт: {e}")
+        st.stop()
+
+    # Шапка
+    st.markdown(
+        f"**Год:** {ctx['year']} &nbsp;|&nbsp; "
+        f"**Дата формирования:** {ctx['generated_date']} &nbsp;|&nbsp; "
+        f"**Организаций в выборке:** {ctx['n_total']} &nbsp;|&nbsp; "
+        f"**Заполнили отчёт:** {ctx['n_filled']}"
+    )
+    st.divider()
+
+    # Раздел 1
+    st.markdown("### Раздел 1. Охват и полнота отчётности")
+    col_r1a, col_r1b = st.columns(2)
+    with col_r1a:
+        st.metric("Всего организаций", ctx["n_total"])
+        st.metric("Заполнили отчёт", ctx["n_filled"])
+    with col_r1b:
+        st.metric("Доля заполненных отчётов", pct(ctx["fill_rate"]))
+    if not ctx["status_table"].empty:
+        st.dataframe(ctx["status_table"], use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Раздел 2
+    st.markdown("### Раздел 2. Состояние системы внутреннего контроля")
+    maturity_items = [
+        ("СВК организован", ctx["svk_org_share"]),
+        ("Полный базовый комплект СВК", ctx["basic_pkg_share"]),
+        ("Методика оценки рисков", ctx["risk_method_share"]),
+        ("Регулярная оценка СВК", ctx["effectiveness_share"]),
+    ]
+    cols_mat = st.columns(len(maturity_items))
+    for col_m, (label, val) in zip(cols_mat, maturity_items):
+        with col_m:
+            st.metric(label, pct(val))
+    if not ctx["form_level_table"].empty:
+        st.markdown("**Распределение по форме СВК:**")
+        st.dataframe(ctx["form_level_table"], use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Раздел 3
+    st.markdown("### Раздел 3. Контрольное покрытие направлений деятельности")
+    col_r3a, col_r3b = st.columns(2)
+    with col_r3a:
+        st.metric("Среднее покрытие активных направлений", pct(ctx["coverage_avg"]))
+    with col_r3b:
+        st.metric("Организаций с непокрытыми направлениями", fmt_num(ctx["uncovered_orgs"]))
+    if not ctx["top_uncovered"].empty:
+        st.markdown("**Топ-3 направления с наибольшим числом организаций без покрытия:**")
+        st.dataframe(ctx["top_uncovered"], use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Раздел 4
+    st.markdown("### Раздел 4. Нарушения и меры реагирования")
+    col_r4a, col_r4b = st.columns(2)
+    with col_r4a:
+        st.metric("Выявлено нарушений", fmt_num(ctx["violations_total"]))
+    with col_r4b:
+        st.metric("Устранено в срок", pct(ctx["fixed_on_time_share"]))
+    if not ctx["viol_table"].empty:
+        viol_display = ctx["viol_table"].copy()
+        viol_display = viol_display[
+            viol_display["metric"] != "Строк с арифметическим противоречием: устранено больше выявлено"
+        ]
+        st.dataframe(viol_display, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Раздел 5
+    st.markdown("### Раздел 5. Организации повышенного внимания")
+    col_r5a, col_r5b = st.columns(2)
+    with col_r5a:
+        st.metric("Слабая форма СВК (ниже рекомендуемой)", fmt_num(ctx["weak_form_orgs"]))
+    with col_r5b:
+        st.metric('Признаки «двойного риска»', fmt_num(ctx["double_risk_orgs"]))
+    if not ctx["risk_group_table"].empty:
+        st.markdown("**Распределение по группам риска:**")
+        st.dataframe(ctx["risk_group_table"], use_container_width=True, hide_index=True)
+    if not ctx["top_risk_table"].empty:
+        st.markdown("**Топ-10 организаций, требующих управленческого внимания:**")
+        st.dataframe(ctx["top_risk_table"], use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Раздел 6
+    st.markdown("### Раздел 6. Выводы и предложения")
+    st.markdown("**Основные выводы:**")
+    for i, finding in enumerate(ctx["findings"], 1):
+        st.markdown(f"{i}. {finding}")
+    if ctx["recommendations"]:
+        st.markdown("**Предложения:**")
+        for i, rec in enumerate(ctx["recommendations"], 1):
+            st.markdown(f"{i}. {rec}")
+
+    st.divider()
+
+    # Экспорт DOCX
+    st.markdown("### Скачать отчёт")
+    try:
+        docx_bytes = build_docx(filtered, scoring_config, int(year))
+        st.download_button(
+            label="Скачать DOCX",
+            data=docx_bytes,
+            file_name=f"monitoring_report_{int(year)}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    except Exception as e:
+        st.warning(f"Не удалось сформировать DOCX: {e}. Убедитесь, что установлен python-docx.")

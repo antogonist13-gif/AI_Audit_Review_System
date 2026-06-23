@@ -142,10 +142,9 @@ def add_peer_benchmarks(
     out["peer_group_key"] = peer_keys
     out["peer_group_level"] = peer_levels
     out["peer_group_size"] = peer_sizes
-    out["peer_form_median"] = peer_form_medians
+    out["peer_form_median"] = np.round(peer_form_medians).astype(int)
     out["peer_coverage_median"] = peer_cov_medians
     out["form_vs_peer"] = out["svk_form_level"] - out["peer_form_median"]
-    out["coverage_vs_peer"] = out["coverage_share_active"] - out["peer_coverage_median"]
     return out
 
 

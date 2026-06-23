@@ -200,7 +200,6 @@ async def get_form_gap(year: int = Query(2025)):
 
     peer_cols = [
         "org_name", "svk_form_level", "peer_form_median", "form_vs_peer",
-        "coverage_share_active", "peer_coverage_median", "coverage_vs_peer",
         "peer_group_size", "peer_group_level", "risk_group",
     ]
     peer_scatter = df[[c for c in peer_cols if c in df.columns]].to_dict(orient="records")

@@ -544,7 +544,7 @@ def top_risk_organizations(df: pd.DataFrame, limit: int = 50) -> pd.DataFrame:
         "org_name", "org_type", "federal_district", "region", "risk_group",
         "coverage_share_active", "uncovered_load_sum", "max_uncovered_load",
         "svk_form_name", "recommended_form_name", "form_gap",
-        "peer_form_median", "form_vs_peer", "coverage_vs_peer", "peer_group_size",
+        "peer_form_median", "form_vs_peer", "peer_group_size",
         "fhd_load_level", "procurement_load_level", "property_load_level", "project_load_level",
         "fhd_covered", "procurement_covered", "property_covered", "project_covered",
         "data_quality_flags",
@@ -558,3 +558,266 @@ def top_risk_organizations(df: pd.DataFrame, limit: int = 50) -> pd.DataFrame:
         + (out["data_quality_flags"].fillna("") != "").astype(int)
     )
     return out.sort_values("risk_sort", ascending=False)[display_cols].head(limit)
+
+
+# --- Анализ аномалий и соразмерности по трём осям ФХД (аддитивный блок) ---------
+# Оси: сумма кассовых поступлений, среднесписочная численность, количество фактов ФХЖ.
+# Дополнительная ось — форма СВК (вид организации внутреннего контроля).
+# Реализация без новых зависимостей (только numpy/pandas).
+
+ANOMALY_AXES: list[tuple[str, str]] = [
+    ("cash_receipts", "Сумма кассовых поступлений"),
+    ("staff_avg", "Среднесписочная численность"),
+    ("fkhz_count", "Количество фактов ФХЖ"),
+]
+
+# Удельные отношения для оценки соразмерности (непропорциональности) осей.
+ANOMALY_RATIOS: list[tuple[str, str, str, str]] = [
+    ("cash_per_staff", "cash_receipts", "staff_avg", "поступления на 1 сотрудника"),
+    ("fkhz_per_staff", "fkhz_count", "staff_avg", "факты ФХЖ на 1 сотрудника"),
+    ("cash_per_fkhz", "cash_receipts", "fkhz_count", "поступления на 1 факт ФХЖ"),
+]
+
+# Порог робастного z-отклонения для удельных отношений и квантиль χ²(3) для
+# многомерного выброса (0.99 ≈ 11.345).
+_RATIO_Z_THRESHOLD = 3.5
+_MAHALANOBIS_CHI2_99 = 11.345
+
+
+def _percentile_rank(values: pd.Series) -> pd.Series:
+    """Percentile rank among positive values (consistent with scoring methodology)."""
+    pct = pd.Series(0.0, index=values.index)
+    positive = values > 0
+    if positive.sum() > 0:
+        pct.loc[positive] = values.loc[positive].rank(pct=True)
+    return pct
+
+
+def _scale_level_from_score(score: pd.Series, thresholds: dict[str, float] | None) -> pd.Series:
+    """Map a 0..1 percentile-style score to a 0..4 level using load-level thresholds."""
+    thresholds = thresholds or {}
+    l1 = float(thresholds.get("level_1_max_percentile", 0.75))
+    l2 = float(thresholds.get("level_2_max_percentile", 0.90))
+    l3 = float(thresholds.get("level_3_max_percentile", 0.95))
+    level = pd.Series(0, index=score.index, dtype="int64")
+    level[(score > 0) & (score <= l1)] = 1
+    level[(score > l1) & (score <= l2)] = 2
+    level[(score > l2) & (score <= l3)] = 3
+    level[score > l3] = 4
+    return level
+
+
+def _robust_z(log_values: pd.Series) -> pd.Series:
+    """Robust z-score (median/MAD) on a log-scale series; NaN where undefined."""
+    valid = log_values.dropna()
+    if len(valid) < 5:
+        return pd.Series(np.nan, index=log_values.index)
+    med = float(valid.median())
+    mad = float((valid - med).abs().median())
+    if mad == 0:
+        std = float(valid.std(ddof=0))
+        if not std or pd.isna(std):
+            return pd.Series(np.nan, index=log_values.index)
+        return (log_values - med) / std
+    return (log_values - med) / (1.4826 * mad)
+
+
+def _mahalanobis_sq(coords: pd.DataFrame) -> pd.Series:
+    """Squared Mahalanobis distance per row (numpy only); NaN if too few rows."""
+    result = pd.Series(np.nan, index=coords.index)
+    data = coords.to_numpy(dtype="float64")
+    mask = ~np.isnan(data).any(axis=1)
+    if mask.sum() < max(10, coords.shape[1] + 1):
+        return result
+    sub = data[mask]
+    mean = sub.mean(axis=0)
+    cov = np.cov(sub, rowvar=False)
+    try:
+        inv = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        inv = np.linalg.pinv(cov)
+    diff = sub - mean
+    md_sq = np.einsum("ij,jk,ik->i", diff, inv, diff)
+    result.loc[coords.index[mask]] = md_sq
+    return result
+
+
+def proportionality_anomalies(
+    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Per-organization anomaly and proportionality analysis across three FHD axes.
+
+    Returns one row per filled report with:
+    - raw axis values and their percentile ranks (``*_pct``);
+    - совокупный масштаб (``scale_score`` 0..1, ``scale_level`` 0..4);
+    - форма СВК (``svk_form_level``/``svk_form_name``);
+    - многомерный выброс (``mahalanobis``, ``scale_outlier``);
+    - удельные отношения и их робастные z-отклонения (``*_z``);
+    - рассогласование масштаб↔форма (``scale_vs_form``);
+    - итоговый балл (``anomaly_score``), текстовые причины (``anomaly_reasons``)
+      и флаг ``is_anomaly``.
+
+    Чисто читающая, аддитивная функция: исходный DataFrame не изменяется.
+    """
+    base = _filled_df(df)
+    if base.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(index=base.index)
+    for col in ["org_name", "org_type", "org_type_classified", "federal_district", "region"]:
+        if col in base.columns:
+            out[col] = base[col]
+
+    vals: dict[str, pd.Series] = {}
+    log_coords: dict[str, pd.Series] = {}
+    pct_ranks: dict[str, pd.Series] = {}
+    for col, _label in ANOMALY_AXES:
+        s = _safe_num(base, col).clip(lower=0)
+        vals[col] = s
+        out[col] = s
+        log_coords[col] = np.log1p(s)
+        pct = _percentile_rank(s)
+        pct_ranks[col] = pct
+        out[f"{col}_pct"] = (pct * 100).round(1)
+
+    # Совокупный масштаб: средний перцентиль по трём осям, уровень — по рангу масштаба.
+    scale_score = pd.concat(pct_ranks.values(), axis=1).mean(axis=1)
+    out["scale_score"] = scale_score.round(3)
+    scale_rank = scale_score.rank(pct=True)
+    thresholds = (scoring_config or {}).get("load_level_thresholds", {})
+    out["scale_level"] = _scale_level_from_score(scale_rank, thresholds)
+
+    if "svk_form_level" in base.columns:
+        out["svk_form_level"] = base["svk_form_level"].fillna(0).astype(int)
+    else:
+        out["svk_form_level"] = 0
+    if "svk_form_name" in base.columns:
+        out["svk_form_name"] = base["svk_form_name"]
+    else:
+        out["svk_form_name"] = out["svk_form_level"].astype(str)
+
+    # Многомерный выброс по лог-координатам (учитывает корреляцию осей).
+    coords = pd.concat([log_coords[c].rename(c) for c, _ in ANOMALY_AXES], axis=1)
+    all_zero = pd.concat(vals.values(), axis=1).sum(axis=1) == 0
+    md_sq = _mahalanobis_sq(coords.mask(all_zero))
+    out["mahalanobis"] = np.sqrt(md_sq).round(2)
+    out["scale_outlier"] = (md_sq > _MAHALANOBIS_CHI2_99).fillna(False)
+
+    # Удельные отношения и робастные z-отклонения в лог-шкале.
+    reason_lists: list[list[str]] = [[] for _ in range(len(base))]
+    z_abs_cols: list[pd.Series] = []
+    for name, num_col, den_col, label in ANOMALY_RATIOS:
+        num = vals[num_col]
+        den = vals[den_col]
+        ratio = (num / den.replace(0, np.nan)).where(num > 0)
+        out[name] = ratio
+        z = _robust_z(np.log(ratio.where(ratio > 0)))
+        out[f"{name}_z"] = z.round(2)
+        z_abs_cols.append(z.abs())
+        for i, idx in enumerate(base.index):
+            zi = z.get(idx, np.nan)
+            if pd.isna(zi):
+                continue
+            if zi > _RATIO_Z_THRESHOLD:
+                reason_lists[i].append(f"Аномально высокое: {label}")
+            elif zi < -_RATIO_Z_THRESHOLD:
+                reason_lists[i].append(f"Аномально низкое: {label}")
+
+    out["scale_vs_form"] = out["scale_level"] - out["svk_form_level"]
+
+    md_flag = out["scale_outlier"].to_numpy()
+    scale_lvl = out["scale_level"].to_numpy()
+    form_lvl = out["svk_form_level"].to_numpy()
+    for i in range(len(base)):
+        if md_flag[i]:
+            reason_lists[i].insert(0, "Нетипичное сочетание объёмов (многомерный выброс)")
+        if scale_lvl[i] >= 3 and form_lvl[i] <= 1:
+            reason_lists[i].append("Крупный масштаб при слабой форме СВК")
+        elif scale_lvl[i] <= 1 and form_lvl[i] >= 4:
+            reason_lists[i].append("Развитая форма СВК при малом масштабе")
+
+    out["anomaly_reasons"] = ["; ".join(r) for r in reason_lists]
+    out["is_anomaly"] = out["anomaly_reasons"].fillna("") != ""
+
+    md_norm = np.sqrt(md_sq).fillna(0.0)
+    z_max = (
+        pd.concat(z_abs_cols, axis=1).max(axis=1).fillna(0.0)
+        if z_abs_cols
+        else pd.Series(0.0, index=base.index)
+    )
+    mismatch = out["scale_vs_form"].abs().fillna(0)
+    out["anomaly_score"] = (md_norm + z_max + mismatch).round(2)
+
+    return out.reset_index(drop=True)
+
+
+def proportionality_anomalies_table(
+    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Compact table of flagged organizations only, sorted by anomaly score."""
+    pa = proportionality_anomalies(df, scoring_config)
+    if pa.empty:
+        return pa
+    flagged = pa[pa["is_anomaly"]].copy()
+    cols = [
+        c
+        for c in [
+            "org_name", "org_type_classified", "federal_district", "region",
+            "cash_receipts", "staff_avg", "fkhz_count",
+            "scale_level", "svk_form_name", "scale_vs_form",
+            "mahalanobis", "anomaly_score", "anomaly_reasons",
+        ]
+        if c in flagged.columns
+    ]
+    return flagged.sort_values("anomaly_score", ascending=False)[cols].reset_index(drop=True)
+
+
+def split_extreme_values(
+    pa: pd.DataFrame, percentiles: float | dict[str, float] = 0.995
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split the anomaly frame into (kept, extreme) by one-sided high percentiles.
+
+    Организация считается экстремальной, если хотя бы по одной из трёх осей
+    (кассовые поступления, численность, факты ФХЖ) её значение превышает порог
+    этой оси. ``percentiles`` — либо одно число (общий перцентиль для всех осей),
+    либо словарь ``{колонка: перцентиль}`` для индивидуальной настройки.
+    Такие наблюдения «растягивают» 3D-график и выносятся в отдельную таблицу
+    на проверку. ``extreme`` дополняется колонкой ``extreme_reason``.
+    """
+    if pa is None or pa.empty:
+        empty = pa if pa is not None else pd.DataFrame()
+        return empty, empty.iloc[0:0] if not empty.empty else empty
+
+    def _pct_for(col: str) -> float:
+        raw = percentiles.get(col, 0.995) if isinstance(percentiles, dict) else percentiles
+        return min(max(float(raw), 0.0), 1.0)
+
+    thresholds: dict[str, float] = {}
+    extreme_mask = pd.Series(False, index=pa.index)
+    for col, _label in ANOMALY_AXES:
+        if col not in pa.columns:
+            continue
+        s = pd.to_numeric(pa[col], errors="coerce")
+        t = s.quantile(_pct_for(col))
+        thresholds[col] = t
+        extreme_mask = extreme_mask | (s > t)
+
+    def _reason(row: pd.Series) -> str:
+        parts: list[str] = []
+        for col, label in ANOMALY_AXES:
+            t = thresholds.get(col)
+            v = row.get(col)
+            if t is None or pd.isna(t) or pd.isna(v) or v <= t:
+                continue
+            ratio = (v / t) if t else float("inf")
+            parts.append(f"{label}: {v:,.0f} (×{ratio:.1f} от порога)")
+        return "; ".join(parts)
+
+    extreme = pa[extreme_mask].copy()
+    if not extreme.empty:
+        extreme["extreme_reason"] = extreme.apply(_reason, axis=1)
+        sort_col = "anomaly_score" if "anomaly_score" in extreme.columns else None
+        if sort_col:
+            extreme = extreme.sort_values(sort_col, ascending=False)
+    kept = pa[~extreme_mask].copy()
+    return kept.reset_index(drop=True), extreme.reset_index(drop=True)

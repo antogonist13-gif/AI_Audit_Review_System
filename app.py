@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -22,6 +23,9 @@ from src.svk_analytics.summaries import (
     management_actions,
     normalized_activity_metrics,
     overview_metrics,
+    proportionality_anomalies,
+    proportionality_anomalies_table,
+    split_extreme_values,
     report_status_summary,
     risk_group_summary,
     risk_methodology_summary,
@@ -197,7 +201,7 @@ with col12:
     metric_card("Двойной риск", fmt_num(int(filtered["risk_group"].str.startswith("D.").sum())))
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Общая статистика",
     "Зрелость СВК",
     "Направления",
@@ -205,6 +209,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Организации в зоне риска",
     "Качество данных",
     "Настройки колонок",
+    "Распределение 3D",
 ])
 
 with tab1:
@@ -348,18 +353,18 @@ with tab3:
 with tab4:
     st.markdown("### Отклонение от организаций с аналогичной нагрузкой")
     st.caption(
-        "Сравнение с медианой формы СВК и доли покрытия направлений среди организаций "
-        "с похожим профилем нагрузки (при нехватке аналогов — более грубая группировка)."
+        "Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
+        "(при нехватке аналогов — более грубая группировка). Отклонение — целые уровни формы."
     )
     if "form_vs_peer" in filtered.columns:
         peer_plot = filtered.copy()
+        peer_plot["form_vs_peer"] = peer_plot["form_vs_peer"].round().astype(int)
         form_peer_counts = (
             peer_plot.groupby("form_vs_peer", dropna=False)
             .size()
             .reset_index(name="orgs")
             .sort_values("form_vs_peer")
         )
-        form_peer_counts["form_vs_peer"] = form_peer_counts["form_vs_peer"].astype(float)
         fig = px.bar(
             form_peer_counts,
             x="form_vs_peer",
@@ -368,12 +373,13 @@ with tab4:
             title="Распределение отклонения формы от медианы аналогов",
         )
         fig.update_layout(
-            xaxis_title="Фактическая форма − медиана аналогов",
+            xaxis_title="Фактическая форма − медиана аналогов (уровни)",
             yaxis_title="Количество организаций",
         )
         st.plotly_chart(fig, use_container_width=True)
 
         if "peer_form_median" in peer_plot.columns:
+            peer_plot["peer_form_median"] = peer_plot["peer_form_median"].round().astype(int)
             fig = px.scatter(
                 peer_plot,
                 x="peer_form_median",
@@ -385,29 +391,6 @@ with tab4:
             )
             fig.update_layout(xaxis_title="Медиана формы у аналогов", yaxis_title="Фактическая форма")
             st.plotly_chart(fig, use_container_width=True)
-
-        if "coverage_vs_peer" in peer_plot.columns:
-            cov_peer = peer_plot.dropna(subset=["coverage_vs_peer"])
-            if not cov_peer.empty:
-                cov_counts = (
-                    cov_peer.assign(coverage_vs_peer_round=cov_peer["coverage_vs_peer"].round(2))
-                    .groupby("coverage_vs_peer_round", dropna=False)
-                    .size()
-                    .reset_index(name="orgs")
-                    .sort_values("coverage_vs_peer_round")
-                )
-                fig = px.bar(
-                    cov_counts,
-                    x="coverage_vs_peer_round",
-                    y="orgs",
-                    text="orgs",
-                    title="Распределение отклонения покрытия направлений от медианы аналогов",
-                )
-                fig.update_layout(
-                    xaxis_title="Доля покрытия − медиана аналогов",
-                    yaxis_title="Количество организаций",
-                )
-                st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(
             "Peer-метрики не найдены. Перезапустите приложение: "
@@ -500,3 +483,244 @@ with tab7:
         st.warning(f"Не найдено колонок: {len(missing)}")
     else:
         st.success("Все ключевые колонки найдены.")
+
+with tab8:
+    pa = proportionality_anomalies(filtered, scoring_config)
+    if pa.empty or len(pa) < 5:
+        st.info("Недостаточно заполненных отчётов в текущей выборке для анализа.")
+    else:
+        st.markdown("### Распределение организаций по трём осям")
+        st.caption(
+            "Общий вид без обработки: исходные значения суммы кассовых поступлений, "
+            "среднесписочной численности и количества фактов ФХЖ; цвет — форма СВК "
+            "(вид организации внутреннего контроля). Из-за сильного разброса большинство "
+            "точек концентрируется у начала координат — это ожидаемо для «сырых» данных."
+        )
+        hide_extremes = st.checkbox(
+            "Скрывать экстремальные значения",
+            value=True,
+            help=(
+                "Организации, превышающие порог хотя бы по одной из осей, исключаются "
+                "из 3D-графиков (чтобы не растягивать шкалы) и выносятся в таблицу на проверку. "
+                "Порог настраивается отдельно по каждой оси."
+            ),
+        )
+        sld_cash, sld_staff, sld_fkhz = st.columns(3)
+        with sld_cash:
+            pct_cash = st.slider(
+                "Порог: кассовые поступления, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not hide_extremes,
+            )
+        with sld_staff:
+            pct_staff = st.slider(
+                "Порог: численность, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not hide_extremes,
+            )
+        with sld_fkhz:
+            pct_fkhz = st.slider(
+                "Порог: факты ФХЖ, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not hide_extremes,
+            )
+        if hide_extremes:
+            kept, extreme = split_extreme_values(
+                pa,
+                {
+                    "cash_receipts": pct_cash / 100.0,
+                    "staff_avg": pct_staff / 100.0,
+                    "fkhz_count": pct_fkhz / 100.0,
+                },
+            )
+        else:
+            kept, extreme = pa, pa.iloc[0:0]
+
+        log_cash_col, log_staff_col, log_fkhz_col = st.columns(3)
+        with log_cash_col:
+            log_cash = st.checkbox("lg по оси «Кассовые поступления»", value=False)
+        with log_staff_col:
+            log_staff = st.checkbox("lg по оси «Численность»", value=False)
+        with log_fkhz_col:
+            log_fkhz = st.checkbox("lg по оси «Факты ФХЖ»", value=False)
+        st.caption(
+            "3D-сцены Plotly не поддерживают лог-оси напрямую: при включении значения по оси "
+            "пересчитываются в десятичный логарифм lg(x). Нулевые значения на лог-шкале не отображаются."
+        )
+
+        plot_raw = kept.copy()
+        plot_raw["x_cash"] = (
+            np.log10(plot_raw["cash_receipts"].where(plot_raw["cash_receipts"] > 0))
+            if log_cash else plot_raw["cash_receipts"]
+        )
+        plot_raw["y_staff"] = (
+            np.log10(plot_raw["staff_avg"].where(plot_raw["staff_avg"] > 0))
+            if log_staff else plot_raw["staff_avg"]
+        )
+        plot_raw["z_fkhz"] = (
+            np.log10(plot_raw["fkhz_count"].where(plot_raw["fkhz_count"] > 0))
+            if log_fkhz else plot_raw["fkhz_count"]
+        )
+        x_title = "Кассовые поступления, lg(руб.)" if log_cash else "Кассовые поступления, руб."
+        y_title = "Среднесписочная численность, lg(чел.)" if log_staff else "Среднесписочная численность"
+        z_title = "Количество фактов ФХЖ, lg(ед.)" if log_fkhz else "Количество фактов ФХЖ"
+        raw3d = px.scatter_3d(
+            plot_raw,
+            x="x_cash",
+            y="y_staff",
+            z="z_fkhz",
+            color="svk_form_name",
+            hover_name="org_name",
+            opacity=0.7,
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            hover_data={
+                "x_cash": False,
+                "y_staff": False,
+                "z_fkhz": False,
+                "cash_receipts": ":,.0f",
+                "staff_avg": ":,.0f",
+                "fkhz_count": ":,.0f",
+            },
+            title="Кассовые поступления × численность × факты ФХЖ (по форме СВК)",
+        )
+        raw3d.update_layout(
+            legend_title="Форма СВК",
+            scene=dict(
+                xaxis=dict(title=x_title),
+                yaxis=dict(title=y_title),
+                zaxis=dict(title=z_title),
+            ),
+            height=700,
+        )
+        st.plotly_chart(raw3d, use_container_width=True)
+
+        if hide_extremes and not extreme.empty:
+            st.markdown("#### Экстремальные значения — вынесены на проверку")
+            st.caption(
+                "Организации, превышающие порог хотя бы по одной из трёх осей. Исключены из "
+                "3D-графиков, чтобы не растягивать шкалы; рекомендуется проверить исходные данные."
+            )
+            ext_cols = [
+                c
+                for c in [
+                    "org_name", "org_type_classified", "federal_district", "region",
+                    "cash_receipts", "staff_avg", "fkhz_count",
+                    "svk_form_name", "extreme_reason",
+                ]
+                if c in extreme.columns
+            ]
+            st.dataframe(extreme[ext_cols], use_container_width=True)
+            st.download_button(
+                "Скачать экстремальные значения CSV",
+                data=extreme[ext_cols].to_csv(index=False, encoding="utf-8-sig"),
+                file_name="extreme_values.csv",
+                mime="text/csv",
+            )
+            st.info(
+                f"Вынесено организаций: {len(extreme)} из {len(pa)} "
+                f"(пороги: поступления {pct_cash:.1f}%, численность {pct_staff:.1f}%, "
+                f"ФХЖ {pct_fkhz:.1f}%)."
+            )
+
+        st.markdown("---")
+
+        st.markdown("### Аномалии и соразмерность по трём осям")
+        st.caption(
+            "Совместный анализ суммы кассовых поступлений, среднесписочной численности и "
+            "количества фактов ФХЖ с учётом формы СВК (вида организации внутреннего контроля). "
+            "Аномалии — это нетипичные сочетания объёмов (многомерный выброс), непропорциональные "
+            "удельные отношения и рассогласование масштаба деятельности с формой СВК."
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            metric_card("Организаций в анализе", fmt_num(len(pa)))
+        with c2:
+            metric_card("С признаками аномалий", fmt_num(int(pa["is_anomaly"].sum())))
+        with c3:
+            metric_card("Многомерных выбросов", fmt_num(int(pa["scale_outlier"].sum())))
+
+        st.markdown("#### Трёхмерная карта организаций")
+        st.caption(
+            "Оси — в логарифмическом масштабе ln(1+x). Цвет — форма СВК, размер маркера — "
+            "итоговый балл аномальности. Наведите курсор для деталей по организации."
+        )
+        plot_df = kept.copy()
+        plot_df["log_cash"] = np.log1p(plot_df["cash_receipts"])
+        plot_df["log_staff"] = np.log1p(plot_df["staff_avg"])
+        plot_df["log_fkhz"] = np.log1p(plot_df["fkhz_count"])
+        plot_df["Балл аномальности"] = plot_df["anomaly_score"].fillna(0)
+        plot_df["marker_size"] = np.sqrt(plot_df["anomaly_score"].fillna(0)) + 1.0
+
+        fig3d = px.scatter_3d(
+            plot_df,
+            x="log_cash",
+            y="log_staff",
+            z="log_fkhz",
+            color="svk_form_name",
+            size="marker_size",
+            size_max=22,
+            opacity=0.75,
+            hover_name="org_name",
+            hover_data={
+                "log_cash": False,
+                "log_staff": False,
+                "log_fkhz": False,
+                "marker_size": False,
+                "cash_receipts": ":,.0f",
+                "staff_avg": ":,.0f",
+                "fkhz_count": ":,.0f",
+                "scale_level": True,
+                "scale_vs_form": True,
+                "Балл аномальности": ":.1f",
+            },
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            title="Кассовые поступления × численность × факты ФХЖ (по форме СВК)",
+        )
+        fig3d.update_layout(
+            legend_title="Форма СВК",
+            scene=dict(
+                xaxis_title="ln(1+кассовые поступления)",
+                yaxis_title="ln(1+численность)",
+                zaxis_title="ln(1+факты ФХЖ)",
+            ),
+            height=700,
+        )
+        st.plotly_chart(fig3d, use_container_width=True)
+
+        st.markdown("#### Масштаб деятельности и форма СВК")
+        st.caption(
+            "Совокупный масштаб (0–4) против формы СВК (0–4). Точки ниже диагонали — крупные "
+            "организации со сравнительно слабой формой; выше — развитая форма при малом масштабе."
+        )
+        mismatch_df = (
+            pa.groupby(["scale_level", "svk_form_level"]).size().reset_index(name="orgs")
+        )
+        fig_mm = px.scatter(
+            mismatch_df,
+            x="scale_level",
+            y="svk_form_level",
+            size="orgs",
+            color="orgs",
+            color_continuous_scale="Blues",
+            title="Распределение организаций: масштаб × форма СВК",
+        )
+        fig_mm.update_layout(
+            xaxis_title="Совокупный масштаб (0–4)",
+            yaxis_title="Форма СВК (0–4)",
+        )
+        st.plotly_chart(fig_mm, use_container_width=True)
+
+        st.markdown("#### Организации с признаками аномалий")
+        anomaly_tab = proportionality_anomalies_table(filtered, scoring_config)
+        if anomaly_tab.empty:
+            st.success("В текущей выборке аномалий не обнаружено.")
+        else:
+            st.dataframe(anomaly_tab, use_container_width=True)
+            st.download_button(
+                "Скачать аномалии CSV",
+                data=anomaly_tab.to_csv(index=False, encoding="utf-8-sig"),
+                file_name="proportionality_anomalies.csv",
+                mime="text/csv",
+            )
+            st.info(f"Найдено организаций с признаками аномалий: {len(anomaly_tab)}")

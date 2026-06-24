@@ -88,7 +88,7 @@ def export_outputs(df: pd.DataFrame, scoring_config: dict[str, Any], output_dir:
         by_dimension_summary(df, "federal_district").to_excel(writer, sheet_name="by_federal_district", index=False)
         by_dimension_summary(df, "org_type").to_excel(writer, sheet_name="by_org_type", index=False)
         cloud_peer_benchmark(df, scoring_config).to_excel(writer, sheet_name="cloud_peer_3d", index=False)
-        scale_axis_profile(df, scoring_config)["bins_count"].to_excel(
+        scale_axis_profile(df, scoring_config).get("bins_count", pd.DataFrame()).to_excel(
             writer, sheet_name="scale_profile_bins", index=False
         )
     paths["summary_xlsx"] = xlsx_path

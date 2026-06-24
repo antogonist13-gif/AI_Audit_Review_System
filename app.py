@@ -651,35 +651,48 @@ with tab8:
             "Ось масштаба — направление роста по трём показателям ФХД в ln(1+x)-пространстве "
             "(первая главная компонента). Ноль — центр облака (типичный масштаб выборки); "
             "отрицательные значения — мельче типичного, положительные — крупнее. "
-            "Графики показывают, где сосредоточены организации и как меняется медиана формы СВК по масштабу."
+            "Графики показывают, где сосредоточены организации и как меняется медиана формы СВК по масштабу. "
+            "Организации без положительных значений по всем трём осям исключаются из расчёта оси и бинов."
         )
 
         sp = scale_axis_profile(filtered, scoring_config)
-        sp_bins_count = sp["bins_count"]
-        sp_bins_share = sp["bins_share"]
+        sp_bins_count = sp.get("bins_count", sp.get("bins", pd.DataFrame()))
+        sp_bins_share = sp.get("bins_share", sp.get("bins", pd.DataFrame()))
         sp_orgs = sp["orgs"]
+        sp_active = (
+            sp_orgs.loc[sp_orgs["active"]]
+            if "active" in sp_orgs.columns
+            else sp_orgs.dropna(subset=["signed_scale"])
+        )
         _FORM_COLORS = ["#d73027", "#fc8d59", "#fee08b", "#91cf60", "#1a9850"]
         _FORM_COLORSCALE = [[i / 4, c] for i, c in enumerate(_FORM_COLORS)]
 
         if sp_bins_count.empty and sp_bins_share.empty:
             st.info(
                 "Недостаточно данных для профиля масштаба "
-                "(нужно не менее 20 заполненных отчётов с тремя осями ФХД)."
+                "(нужно не менее 20 заполненных отчётов с положительными значениями по всем трём осям ФХД)."
             )
         else:
-            scores_std = float(sp_orgs["signed_scale"].std(ddof=0)) if not sp_orgs.empty else 1.0
+            inactive_n = int((~sp_orgs["active"]).sum()) if "active" in sp_orgs.columns else 0
+            if inactive_n:
+                st.caption(
+                    f"Исключено из расчёта оси масштаба и бинов: {inactive_n} орг. "
+                    "(нет положительных значений по всем трём осям)."
+                )
+
+            scores_std = float(sp_active["signed_scale"].std(ddof=0)) if not sp_active.empty else 1.0
             if scores_std <= 0:
                 scores_std = 1.0
 
-            if not sp_orgs.empty:
+            if not sp_active.empty:
                 center_cash = np.expm1(
-                    np.log1p(pd.to_numeric(sp_orgs["cash_receipts"], errors="coerce").fillna(0)).mean()
+                    np.log1p(pd.to_numeric(sp_active["cash_receipts"], errors="coerce").fillna(0)).mean()
                 )
                 center_staff = np.expm1(
-                    np.log1p(pd.to_numeric(sp_orgs["staff_avg"], errors="coerce").fillna(0)).mean()
+                    np.log1p(pd.to_numeric(sp_active["staff_avg"], errors="coerce").fillna(0)).mean()
                 )
                 center_fkhz = np.expm1(
-                    np.log1p(pd.to_numeric(sp_orgs["fkhz_count"], errors="coerce").fillna(0)).mean()
+                    np.log1p(pd.to_numeric(sp_active["fkhz_count"], errors="coerce").fillna(0)).mean()
                 )
 
                 k1, k2, k3 = st.columns(3)

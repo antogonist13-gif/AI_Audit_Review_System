@@ -974,6 +974,8 @@ def _aggregate_scale_bins(
     filled_index: pd.Index,
     log_arr: np.ndarray,
     form_levels: pd.Series,
+    *,
+    round_form_median: bool = False,
 ) -> list[dict[str, Any]]:
     """Aggregate per-bin stats for scale-axis profile."""
     bin_rows: list[dict[str, Any]] = []
@@ -985,13 +987,16 @@ def _aggregate_scale_bins(
 
         forms = form_levels.loc[g_idx]
         valid_forms = forms.dropna()
+        form_median = float(valid_forms.median()) if not valid_forms.empty else np.nan
+        if round_form_median and not np.isnan(form_median):
+            form_median = int(round(form_median))
         row: dict[str, Any] = {
             "signed_scale_mid": float(bin_interval.mid),
             "typical_cash": float(typical[0]),
             "typical_staff": float(typical[1]),
             "typical_fkhz": float(typical[2]),
             "n": int(len(group)),
-            "form_median": float(valid_forms.median()) if not valid_forms.empty else np.nan,
+            "form_median": form_median,
             "form_q25": float(valid_forms.quantile(0.25)) if not valid_forms.empty else np.nan,
             "form_q75": float(valid_forms.quantile(0.75)) if not valid_forms.empty else np.nan,
             "low_n": int(len(group)) < _SCALE_PROFILE_LOW_N,
@@ -1011,7 +1016,7 @@ def scale_axis_profile(
     """Scale-axis profile: PC1 of standardized ln(1+x) coords and dual bin summaries.
 
     Returns ``bins_count`` (equal-width ``pd.cut``), ``bins_share`` (equal-count ``pd.qcut``),
-    and ``orgs`` (organizations with ``signed_scale``).
+    and ``orgs`` (organizations with ``signed_scale`` and ``active`` flag).
     """
     _ = scoring_config  # reserved for future config hooks
     empty = {
@@ -1025,9 +1030,20 @@ def scale_axis_profile(
     if any(ax not in filled.columns for ax in _SCALE_PROFILE_AXES):
         return empty
 
+    axis_vals = {ax: _safe_num(filled, ax).fillna(0) for ax in _SCALE_PROFILE_AXES}
+    active_mask = (
+        (axis_vals["cash_receipts"] > 0)
+        & (axis_vals["staff_avg"] > 0)
+        & (axis_vals["fkhz_count"] > 0)
+    )
+    if int(active_mask.sum()) < _SCALE_PROFILE_MIN_ORGS:
+        return empty
+
+    active = filled.loc[active_mask]
+    active_index = active.index
     log_arr = np.column_stack(
         [
-            np.log1p(_safe_num(filled, ax).clip(lower=0).fillna(0).to_numpy(dtype="float64"))
+            np.log1p(_safe_num(active, ax).to_numpy(dtype="float64"))
             for ax in _SCALE_PROFILE_AXES
         ]
     )
@@ -1040,10 +1056,12 @@ def scale_axis_profile(
     pc1 = eigvecs[:, int(np.argmax(eigvals))]
     if pc1.sum() < 0:
         pc1 = -pc1
-    scores = z @ pc1
+    scores_active = z @ pc1
 
     orgs = filled.copy()
-    orgs["signed_scale"] = scores
+    orgs["active"] = active_mask
+    orgs["signed_scale"] = np.nan
+    orgs.loc[active_mask, "signed_scale"] = scores_active
 
     has_form = "svk_form_level" in orgs.columns
     form_levels = (
@@ -1052,27 +1070,37 @@ def scale_axis_profile(
         else pd.Series(np.nan, index=orgs.index)
     )
 
+    active_orgs = orgs.loc[active_mask].copy()
     count_rows: list[dict[str, Any]] = []
     share_rows: list[dict[str, Any]] = []
     try:
-        orgs["_bin_count"] = pd.cut(
-            orgs["signed_scale"],
+        active_orgs["_bin_count"] = pd.cut(
+            active_orgs["signed_scale"],
             bins=_SCALE_PROFILE_N_BINS_COUNT,
         )
         count_rows = _aggregate_scale_bins(
-            orgs, "_bin_count", filled.index, log_arr, form_levels
+            active_orgs,
+            "_bin_count",
+            active_index,
+            log_arr,
+            form_levels,
+            round_form_median=True,
         )
     except ValueError:
         pass
 
     try:
-        orgs["_bin_share"] = pd.qcut(
-            orgs["signed_scale"],
+        active_orgs["_bin_share"] = pd.qcut(
+            active_orgs["signed_scale"],
             q=_SCALE_PROFILE_N_BINS_SHARE,
             duplicates="drop",
         )
         share_rows = _aggregate_scale_bins(
-            orgs, "_bin_share", filled.index, log_arr, form_levels
+            active_orgs,
+            "_bin_share",
+            active_index,
+            log_arr,
+            form_levels,
         )
     except ValueError:
         pass

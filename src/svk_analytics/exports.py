@@ -7,6 +7,7 @@ import pandas as pd
 
 from .summaries import (
     anomalies_table,
+    cloud_peer_benchmark,
     by_dimension_summary,
     contradictions_table,
     data_quality_issues,
@@ -18,6 +19,7 @@ from .summaries import (
     report_status_summary,
     risk_group_summary,
     risk_methodology_summary,
+    scale_axis_profile,
     svk_elements_summary,
     svk_form_flags_summary,
     svk_form_level_summary,
@@ -85,6 +87,10 @@ def export_outputs(df: pd.DataFrame, scoring_config: dict[str, Any], output_dir:
         data_quality_issues(df).to_excel(writer, sheet_name="quality_issues", index=False)
         by_dimension_summary(df, "federal_district").to_excel(writer, sheet_name="by_federal_district", index=False)
         by_dimension_summary(df, "org_type").to_excel(writer, sheet_name="by_org_type", index=False)
+        cloud_peer_benchmark(df, scoring_config).to_excel(writer, sheet_name="cloud_peer_3d", index=False)
+        scale_axis_profile(df, scoring_config)["bins_count"].to_excel(
+            writer, sheet_name="scale_profile_bins", index=False
+        )
     paths["summary_xlsx"] = xlsx_path
 
     return paths

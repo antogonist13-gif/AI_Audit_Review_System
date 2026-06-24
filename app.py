@@ -6,11 +6,12 @@ import tempfile
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.svk_analytics.columns import build_canonical_frame, resolve_columns
 from src.svk_analytics.io import find_latest_raw_file, load_report, load_yaml
-from src.svk_analytics.scoring import enrich_with_metrics
+from src.svk_analytics.scoring import _form_name, enrich_with_metrics
 from src.svk_analytics.summaries import (
     anomalies_table,
     by_dimension_summary,
@@ -23,8 +24,11 @@ from src.svk_analytics.summaries import (
     management_actions,
     normalized_activity_metrics,
     overview_metrics,
+    cloud_peer_benchmark,
+    cloud_peer_benchmark_table,
+    get_cloud_peer_neighbor_names,
     proportionality_anomalies,
-    proportionality_anomalies_table,
+    scale_axis_profile,
     split_extreme_values,
     report_status_summary,
     risk_group_summary,
@@ -50,11 +54,13 @@ def load_canonical_report(path: str, file_mtime: float | None = None):
     return canonical, resolution_report
 
 
-def load_and_score(path: str, year: int | None):
+def load_and_score(path: str, year: int | None, min_group_size: int | None = None):
     p = Path(path)
     mtime = p.stat().st_mtime if p.exists() else None
     canonical, resolution_report = load_canonical_report(path, mtime)
     scoring_config = load_yaml("config/scoring.yml")
+    if min_group_size is not None:
+        scoring_config.setdefault("peer_benchmark", {})["min_group_size"] = min_group_size
     enriched = enrich_with_metrics(canonical, scoring_config, year=year)
     return enriched, scoring_config, resolution_report
 
@@ -110,6 +116,20 @@ with st.sidebar:
             st.info(f"Используется файл из data/raw: {latest.name}")
         else:
             st.warning("Положите файл в data/raw или загрузите его выше.")
+    st.markdown("---")
+    st.header("Параметры анализа")
+    peer_min_group_size = st.number_input(
+        "Мин. число организаций-аналогов",
+        min_value=3,
+        max_value=100,
+        value=5,
+        step=1,
+        help=(
+            "Минимальный размер группы аналогов для сравнения в разделах «Соразмерность формы» "
+            "и «Распределение 3D». При нехватке организаций применяется откат к более грубой группировке."
+        ),
+    )
+
     if st.button("Обновить данные", help="Очистить кэш загрузки отчёта и перечитать файл"):
         st.cache_data.clear()
         st.rerun()
@@ -146,7 +166,9 @@ if not input_path:
     st.stop()
 
 try:
-    df, scoring_config, resolution_report = load_and_score(input_path, int(year))
+    df, scoring_config, resolution_report = load_and_score(
+        input_path, int(year), min_group_size=int(peer_min_group_size)
+    )
 except Exception as e:
     st.error(f"Не удалось загрузить и обработать отчет: {e}")
     st.stop()
@@ -353,8 +375,9 @@ with tab3:
 with tab4:
     st.markdown("### Отклонение от организаций с аналогичной нагрузкой")
     st.caption(
-        "Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
-        "(при нехватке аналогов — более грубая группировка). Отклонение — целые уровни формы."
+        f"Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
+        f"(мин. группа аналогов: {peer_min_group_size} орг.; при нехватке — более грубая группировка). "
+        "Отклонение — целые уровни формы."
     )
     if "form_vs_peer" in filtered.columns:
         peer_plot = filtered.copy()
@@ -623,104 +646,338 @@ with tab8:
             )
 
         st.markdown("---")
-
-        st.markdown("### Аномалии и соразмерность по трём осям")
+        st.markdown("### Профиль масштаба: концентрация и форма СВК")
         st.caption(
-            "Совместный анализ суммы кассовых поступлений, среднесписочной численности и "
-            "количества фактов ФХЖ с учётом формы СВК (вида организации внутреннего контроля). "
-            "Аномалии — это нетипичные сочетания объёмов (многомерный выброс), непропорциональные "
-            "удельные отношения и рассогласование масштаба деятельности с формой СВК."
+            "Ось масштаба — направление роста по трём показателям ФХД в ln(1+x)-пространстве "
+            "(первая главная компонента). Ноль — центр облака (типичный масштаб выборки); "
+            "отрицательные значения — мельче типичного, положительные — крупнее. "
+            "Графики показывают, где сосредоточены организации и как меняется медиана формы СВК по масштабу."
         )
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            metric_card("Организаций в анализе", fmt_num(len(pa)))
-        with c2:
-            metric_card("С признаками аномалий", fmt_num(int(pa["is_anomaly"].sum())))
-        with c3:
-            metric_card("Многомерных выбросов", fmt_num(int(pa["scale_outlier"].sum())))
+        sp = scale_axis_profile(filtered, scoring_config)
+        sp_bins_count = sp["bins_count"]
+        sp_bins_share = sp["bins_share"]
+        sp_orgs = sp["orgs"]
+        _FORM_COLORS = ["#d73027", "#fc8d59", "#fee08b", "#91cf60", "#1a9850"]
+        _FORM_COLORSCALE = [[i / 4, c] for i, c in enumerate(_FORM_COLORS)]
 
-        st.markdown("#### Трёхмерная карта организаций")
-        st.caption(
-            "Оси — в логарифмическом масштабе ln(1+x). Цвет — форма СВК, размер маркера — "
-            "итоговый балл аномальности. Наведите курсор для деталей по организации."
-        )
-        plot_df = kept.copy()
-        plot_df["log_cash"] = np.log1p(plot_df["cash_receipts"])
-        plot_df["log_staff"] = np.log1p(plot_df["staff_avg"])
-        plot_df["log_fkhz"] = np.log1p(plot_df["fkhz_count"])
-        plot_df["Балл аномальности"] = plot_df["anomaly_score"].fillna(0)
-        plot_df["marker_size"] = np.sqrt(plot_df["anomaly_score"].fillna(0)) + 1.0
-
-        fig3d = px.scatter_3d(
-            plot_df,
-            x="log_cash",
-            y="log_staff",
-            z="log_fkhz",
-            color="svk_form_name",
-            size="marker_size",
-            size_max=22,
-            opacity=0.75,
-            hover_name="org_name",
-            hover_data={
-                "log_cash": False,
-                "log_staff": False,
-                "log_fkhz": False,
-                "marker_size": False,
-                "cash_receipts": ":,.0f",
-                "staff_avg": ":,.0f",
-                "fkhz_count": ":,.0f",
-                "scale_level": True,
-                "scale_vs_form": True,
-                "Балл аномальности": ":.1f",
-            },
-            color_discrete_sequence=px.colors.qualitative.Set2,
-            title="Кассовые поступления × численность × факты ФХЖ (по форме СВК)",
-        )
-        fig3d.update_layout(
-            legend_title="Форма СВК",
-            scene=dict(
-                xaxis_title="ln(1+кассовые поступления)",
-                yaxis_title="ln(1+численность)",
-                zaxis_title="ln(1+факты ФХЖ)",
-            ),
-            height=700,
-        )
-        st.plotly_chart(fig3d, use_container_width=True)
-
-        st.markdown("#### Масштаб деятельности и форма СВК")
-        st.caption(
-            "Совокупный масштаб (0–4) против формы СВК (0–4). Точки ниже диагонали — крупные "
-            "организации со сравнительно слабой формой; выше — развитая форма при малом масштабе."
-        )
-        mismatch_df = (
-            pa.groupby(["scale_level", "svk_form_level"]).size().reset_index(name="orgs")
-        )
-        fig_mm = px.scatter(
-            mismatch_df,
-            x="scale_level",
-            y="svk_form_level",
-            size="orgs",
-            color="orgs",
-            color_continuous_scale="Blues",
-            title="Распределение организаций: масштаб × форма СВК",
-        )
-        fig_mm.update_layout(
-            xaxis_title="Совокупный масштаб (0–4)",
-            yaxis_title="Форма СВК (0–4)",
-        )
-        st.plotly_chart(fig_mm, use_container_width=True)
-
-        st.markdown("#### Организации с признаками аномалий")
-        anomaly_tab = proportionality_anomalies_table(filtered, scoring_config)
-        if anomaly_tab.empty:
-            st.success("В текущей выборке аномалий не обнаружено.")
-        else:
-            st.dataframe(anomaly_tab, use_container_width=True)
-            st.download_button(
-                "Скачать аномалии CSV",
-                data=anomaly_tab.to_csv(index=False, encoding="utf-8-sig"),
-                file_name="proportionality_anomalies.csv",
-                mime="text/csv",
+        if sp_bins_count.empty and sp_bins_share.empty:
+            st.info(
+                "Недостаточно данных для профиля масштаба "
+                "(нужно не менее 20 заполненных отчётов с тремя осями ФХД)."
             )
-            st.info(f"Найдено организаций с признаками аномалий: {len(anomaly_tab)}")
+        else:
+            scores_std = float(sp_orgs["signed_scale"].std(ddof=0)) if not sp_orgs.empty else 1.0
+            if scores_std <= 0:
+                scores_std = 1.0
+
+            if not sp_orgs.empty:
+                center_cash = np.expm1(
+                    np.log1p(pd.to_numeric(sp_orgs["cash_receipts"], errors="coerce").fillna(0)).mean()
+                )
+                center_staff = np.expm1(
+                    np.log1p(pd.to_numeric(sp_orgs["staff_avg"], errors="coerce").fillna(0)).mean()
+                )
+                center_fkhz = np.expm1(
+                    np.log1p(pd.to_numeric(sp_orgs["fkhz_count"], errors="coerce").fillna(0)).mean()
+                )
+
+                k1, k2, k3 = st.columns(3)
+                with k1:
+                    metric_card("Типичные поступления", f"≈ {center_cash / 1e6:,.0f} млн руб.")
+                with k2:
+                    metric_card("Типичная численность", f"≈ {center_staff:,.0f} чел.")
+                with k3:
+                    metric_card("Типичные факты ФХЖ", f"≈ {center_fkhz:,.0f} ед.")
+
+            def _sigma_label(mid: float) -> str:
+                if abs(mid) < 1e-9:
+                    return "0"
+                sigma = mid / scores_std
+                if abs(sigma) < 0.05:
+                    return "0"
+                rounded = round(sigma, 1)
+                if rounded == 0:
+                    return "0"
+                prefix = "+" if rounded > 0 else "−"
+                return f"{prefix}{abs(rounded)}σ"
+
+            def _typical_label(row: pd.Series) -> str:
+                return (
+                    f"≈ {row['typical_cash'] / 1e6:,.0f} млн руб / "
+                    f"{row['typical_staff']:,.0f} чел / {row['typical_fkhz']:,.0f} ед."
+                )
+
+            def _scale_x_axis(bins_df: pd.DataFrame) -> tuple[list[int], dict, int]:
+                x_labels = [
+                    f"{_sigma_label(row['signed_scale_mid'])}<br>{_typical_label(row)}"
+                    for _, row in bins_df.iterrows()
+                ]
+                x_pos = list(range(len(bins_df)))
+                x_axis = dict(tickmode="array", tickvals=x_pos, ticktext=x_labels)
+                center_idx = int(np.argmin(np.abs(bins_df["signed_scale_mid"].to_numpy())))
+                return x_pos, x_axis, center_idx
+
+            if not sp_bins_count.empty:
+                x_pos_count, x_axis_count, center_idx_count = _scale_x_axis(sp_bins_count)
+                bar_opacity = [0.5 if low else 1.0 for low in sp_bins_count["low_n"]]
+                bar_hover = [
+                    (
+                        f"Медиана формы: {m:.1f}<br>Организаций: {n}"
+                        + ("<br><b>n мало</b>" if low else "")
+                    )
+                    for m, n, low in zip(
+                        sp_bins_count["form_median"], sp_bins_count["n"], sp_bins_count["low_n"]
+                    )
+                ]
+
+                fig_scale_n = go.Figure(
+                    go.Bar(
+                        x=x_pos_count,
+                        y=sp_bins_count["n"],
+                        marker=dict(
+                            color=sp_bins_count["form_median"],
+                            colorscale=_FORM_COLORSCALE,
+                            cmin=0,
+                            cmax=4,
+                            opacity=bar_opacity,
+                            colorbar=dict(
+                                title="Медиана формы СВК",
+                                tickvals=list(range(5)),
+                                ticktext=[_form_name(i) for i in range(5)],
+                            ),
+                        ),
+                        text=[
+                            f"{m:.0f} | n={n}"
+                            for m, n in zip(sp_bins_count["form_median"], sp_bins_count["n"])
+                        ],
+                        textposition="outside",
+                        hovertext=bar_hover,
+                        hoverinfo="text",
+                    )
+                )
+                fig_scale_n.add_vline(
+                    x=center_idx_count,
+                    line_width=1.5,
+                    line_dash="dash",
+                    line_color="gray",
+                    annotation_text="Центр облака",
+                    annotation_position="top",
+                )
+                fig_scale_n.update_layout(
+                    title="Распределение организаций по масштабу",
+                    xaxis=dict(title="Позиция по оси масштаба", **x_axis_count),
+                    yaxis_title="Число организаций",
+                    height=480,
+                )
+                st.plotly_chart(fig_scale_n, use_container_width=True)
+
+            if not sp_bins_share.empty:
+                x_pos_share, x_axis_share, center_idx_share = _scale_x_axis(sp_bins_share)
+                fig_scale_share = go.Figure()
+                for level in range(5):
+                    share_pct = sp_bins_share[f"form_share_{level}"] * 100
+                    count_in_bin = (sp_bins_share[f"form_share_{level}"] * sp_bins_share["n"]).round(0)
+                    fig_scale_share.add_trace(
+                        go.Bar(
+                            name=f"{level} — {_form_name(level)}",
+                            x=x_pos_share,
+                            y=share_pct,
+                            marker_color=_FORM_COLORS[level],
+                            customdata=count_in_bin,
+                            hovertemplate=(
+                                f"Форма {level}<br>"
+                                "Доля: %{y:.1f}%<br>"
+                                "Организаций: %{customdata:.0f}"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+                fig_scale_share.add_vline(
+                    x=center_idx_share,
+                    line_width=1.5,
+                    line_dash="dash",
+                    line_color="gray",
+                )
+                fig_scale_share.update_layout(
+                    barmode="stack",
+                    title="Структура форм СВК по уровням масштаба",
+                    xaxis=dict(title="Позиция по оси масштаба", **x_axis_share),
+                    yaxis_title="Доля организаций, %",
+                    yaxis=dict(range=[0, 100]),
+                    legend_title="Форма СВК",
+                    height=480,
+                )
+                st.plotly_chart(fig_scale_share, use_container_width=True)
+
+        st.markdown("---")
+
+        st.markdown("### Сравнение с аналогами в облаке")
+        st.caption(
+            f"Для каждой организации находятся {int(scoring_config.get('peer_benchmark', {}).get('min_group_size', 5))} "
+            "ближайших соседей в пространстве ln(1+поступления), ln(1+численность), ln(1+ФХЖ). "
+            "Сравнивается фактическая форма СВК с медианой формы у соседей. "
+            "Перекос профиля показывает, по какой оси масштаб отличается от типичного у соседей; "
+            "доверие к сравнению выше, когда соседи близко и их достаточно."
+        )
+
+        cp_full = cloud_peer_benchmark(filtered, scoring_config)
+        if "org_name" in kept.columns and "org_name" in cp_full.columns:
+            cp = cp_full[cp_full["org_name"].isin(kept["org_name"])].copy()
+        else:
+            cp = cp_full.copy()
+        min_k = int(scoring_config.get("peer_benchmark", {}).get("min_group_size", 5))
+        if cp_full.empty or len(cp_full) < min_k + 1:
+            st.info(
+                f"Недостаточно организаций для сравнения с аналогами в облаке "
+                f"(нужно не менее {min_k + 1}, сейчас {len(cp_full)})."
+            )
+        else:
+            below_peer = cp[
+                (cp["form_vs_peer_3d"] <= -1) & (cp["peer_3d_confidence"] >= 0.5)
+            ]
+            avg_conf = cp["peer_3d_confidence"].mean()
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                metric_card("Организаций в анализе", fmt_num(len(cp)))
+            with c2:
+                metric_card("Форма ниже соседей (надёжно)", fmt_num(len(below_peer)))
+            with c3:
+                metric_card("Среднее доверие к сравнению", fmt_num(avg_conf, 2) if pd.notna(avg_conf) else "—")
+
+            plot_cp = cp.copy()
+            plot_cp["log_cash"] = np.log1p(plot_cp["cash_receipts"])
+            plot_cp["log_staff"] = np.log1p(plot_cp["staff_avg"])
+            plot_cp["log_fkhz"] = np.log1p(plot_cp["fkhz_count"])
+
+            st.markdown("#### 3D-облако: отклонение формы от соседей")
+            fig3d = px.scatter_3d(
+                plot_cp,
+                x="log_cash",
+                y="log_staff",
+                z="log_fkhz",
+                color="form_vs_peer_3d",
+                color_continuous_scale="RdBu_r",
+                color_continuous_midpoint=0,
+                opacity=0.8,
+                hover_name="org_name",
+                hover_data={
+                    "log_cash": False,
+                    "log_staff": False,
+                    "log_fkhz": False,
+                    "cash_receipts": ":,.0f",
+                    "staff_avg": ":,.0f",
+                    "fkhz_count": ":,.0f",
+                    "peer_3d_form_median": True,
+                    "form_vs_peer_3d": True,
+                    "profile_skew_3d": ":.3f",
+                    "profile_skew_3d_axis": True,
+                    "peer_3d_confidence": ":.2f",
+                },
+                title="Отклонение формы СВК от медианы ближайших соседей",
+            )
+            fig3d.update_layout(
+                coloraxis_colorbar_title="Форма − медиана соседей",
+                scene=dict(
+                    xaxis_title="ln(1+кассовые поступления)",
+                    yaxis_title="ln(1+численность)",
+                    zaxis_title="ln(1+факты ФХЖ)",
+                ),
+                height=700,
+            )
+            st.plotly_chart(fig3d, use_container_width=True)
+
+            org_options = sorted(plot_cp["org_name"].dropna().astype(str).unique())
+            selected_org = st.selectbox(
+                "Подсветить соседей для организации",
+                options=["—"] + org_options,
+                index=0,
+            )
+            if selected_org != "—":
+                neighbors = get_cloud_peer_neighbor_names(cp_full, selected_org)
+                neighbor_set = set(neighbors)
+                hi = plot_cp.copy()
+                names = hi["org_name"].astype(str)
+                hi["Группа"] = np.select(
+                    [
+                        names == selected_org,
+                        names.isin(neighbor_set),
+                    ],
+                    ["Выбранная организация", "Соседи"],
+                    default="Прочие",
+                )
+                fig_hi = px.scatter_3d(
+                    hi,
+                    x="log_cash",
+                    y="log_staff",
+                    z="log_fkhz",
+                    color="Группа",
+                    category_orders={
+                        "Группа": ["Выбранная организация", "Соседи", "Прочие"],
+                    },
+                    color_discrete_map={
+                        "Выбранная организация": "#f39c12",
+                        "Соседи": "#3498db",
+                        "Прочие": "#bdbdbd",
+                    },
+                    opacity=0.85,
+                    hover_name="org_name",
+                    title=f"Соседи в облаке: {selected_org}",
+                )
+                fig_hi.update_layout(
+                    scene=dict(
+                        xaxis_title="ln(1+кассовые поступления)",
+                        yaxis_title="ln(1+численность)",
+                        zaxis_title="ln(1+факты ФХЖ)",
+                    ),
+                    height=650,
+                )
+                st.plotly_chart(fig_hi, use_container_width=True)
+                if neighbors:
+                    st.caption(f"Соседей: {len(neighbors)} — {', '.join(neighbors[:5])}" + (" …" if len(neighbors) > 5 else ""))
+
+            st.markdown("#### Фактическая форма vs медиана соседей")
+            peer_scatter = cp.dropna(subset=["peer_3d_form_median", "svk_form_level"]).copy()
+            if not peer_scatter.empty:
+                fig_peer = px.scatter(
+                    peer_scatter,
+                    x="peer_3d_form_median",
+                    y="svk_form_level",
+                    color="form_vs_peer_3d",
+                    color_continuous_scale="RdBu_r",
+                    color_continuous_midpoint=0,
+                    size="peer_3d_confidence",
+                    size_max=18,
+                    hover_name="org_name",
+                    title="Фактическая форма vs медиана ближайших соседей",
+                )
+                fig_peer.update_layout(
+                    xaxis_title="Медиана формы у соседей (0–4)",
+                    yaxis_title="Фактическая форма СВК (0–4)",
+                )
+                max_level = max(4, int(peer_scatter["svk_form_level"].max()), int(peer_scatter["peer_3d_form_median"].max()))
+                fig_peer.add_shape(
+                    type="line",
+                    x0=0,
+                    y0=0,
+                    x1=max_level,
+                    y1=max_level,
+                    line=dict(color="gray", dash="dash"),
+                    layer="below",
+                )
+                st.plotly_chart(fig_peer, use_container_width=True)
+
+            st.markdown("#### Организации с формой ниже соседей")
+            priority_tab = cloud_peer_benchmark_table(filtered, scoring_config)
+            if priority_tab.empty:
+                st.success("В текущей выборке приоритетных отклонений не обнаружено.")
+            else:
+                st.dataframe(priority_tab, use_container_width=True)
+                st.download_button(
+                    "Скачать peer-3D CSV",
+                    data=cp_full.to_csv(index=False, encoding="utf-8-sig"),
+                    file_name="cloud_peer_3d.csv",
+                    mime="text/csv",
+                )
+                st.info(f"Найдено организаций с формой ниже соседей (надёжное сравнение): {len(priority_tab)}")

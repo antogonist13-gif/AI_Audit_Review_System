@@ -821,3 +821,275 @@ def split_extreme_values(
             extreme = extreme.sort_values(sort_col, ascending=False)
     kept = pa[~extreme_mask].copy()
     return kept.reset_index(drop=True), extreme.reset_index(drop=True)
+
+
+# --- Сравнение с аналогами в 3D-облаке (k ближайших соседей по трём осям ФХД) -------
+
+_CLOUD_PEER_AXIS_LABELS: dict[str, str] = {
+    "cash_receipts": "Кассовые поступления",
+    "staff_avg": "Среднесписочная численность",
+    "fkhz_count": "Количество фактов ФХЖ",
+}
+
+
+def _cloud_peer_min_group_size(scoring_config: dict[str, Any] | None) -> int:
+    peer_cfg = (scoring_config or {}).get("peer_benchmark", {})
+    return max(1, int(peer_cfg.get("min_group_size", 5)))
+
+
+def cloud_peer_benchmark(
+    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Peer comparison by k nearest neighbors in ln(1+x) space of three FHD axes."""
+    base = _filled_df(df)
+    if base.empty:
+        return pd.DataFrame()
+
+    k = _cloud_peer_min_group_size(scoring_config)
+    n = len(base)
+    if n < k + 1:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(index=base.index)
+    for col in [
+        "org_name", "org_type", "org_type_classified", "federal_district", "region",
+        "cash_receipts", "staff_avg", "fkhz_count",
+        "svk_form_level", "svk_form_name", "form_vs_peer",
+    ]:
+        if col in base.columns:
+            out[col] = base[col]
+
+    coords = np.column_stack(
+        [
+            np.log1p(_safe_num(base, col).clip(lower=0).fillna(0).to_numpy(dtype="float64"))
+            for col, _ in ANOMALY_AXES
+        ]
+    )
+    diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
+    dist_sq = np.sum(diff ** 2, axis=2)
+    np.fill_diagonal(dist_sq, np.inf)
+
+    form_levels = (
+        base["svk_form_level"].fillna(0).astype(int).to_numpy()
+        if "svk_form_level" in base.columns
+        else np.zeros(n, dtype=int)
+    )
+    org_names = base["org_name"].astype(str).to_numpy() if "org_name" in base.columns else np.arange(n).astype(str)
+
+    peer_medians: list[int] = []
+    form_vs: list[int] = []
+    skew_vals: list[float] = []
+    skew_axes: list[str] = []
+    group_sizes: list[int] = []
+    mean_dists: list[float] = []
+    neighbor_names: list[str] = []
+
+    for i in range(n):
+        neighbor_idx = np.argpartition(dist_sq[i], k - 1)[:k]
+        neighbor_idx = neighbor_idx[np.argsort(dist_sq[i, neighbor_idx])]
+        neighbor_forms = form_levels[neighbor_idx]
+        median_form = int(np.round(float(np.median(neighbor_forms))))
+        peer_medians.append(median_form)
+        form_vs.append(int(form_levels[i]) - median_form)
+
+        neighbor_coords = coords[neighbor_idx]
+        axis_skews = np.abs(coords[i] - np.median(neighbor_coords, axis=0))
+        max_axis = int(np.argmax(axis_skews))
+        skew_vals.append(round(float(axis_skews[max_axis]), 3))
+        skew_axes.append(list(_CLOUD_PEER_AXIS_LABELS.keys())[max_axis])
+
+        dists = np.sqrt(dist_sq[i, neighbor_idx])
+        mean_dists.append(round(float(dists.mean()), 4))
+        group_sizes.append(len(neighbor_idx))
+        neighbor_names.append("; ".join(org_names[j] for j in neighbor_idx))
+
+    out["peer_3d_form_median"] = peer_medians
+    out["form_vs_peer_3d"] = form_vs
+    out["profile_skew_3d"] = skew_vals
+    out["profile_skew_3d_axis"] = skew_axes
+    out["peer_3d_group_size"] = group_sizes
+    out["peer_3d_mean_distance"] = mean_dists
+    out["peer_3d_neighbors"] = neighbor_names
+
+    dist_series = pd.Series(mean_dists, index=base.index)
+    dist_rank = dist_series.rank(method="average", pct=True)
+    size_factor = (pd.Series(group_sizes, index=base.index) / float(k)).clip(upper=1.0)
+    out["peer_3d_confidence"] = (size_factor * (1.0 - dist_rank)).round(2)
+
+    return out.reset_index(drop=True)
+
+
+def cloud_peer_benchmark_table(
+    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Priority organizations: form below cloud peers with reliable comparison."""
+    cp = cloud_peer_benchmark(df, scoring_config)
+    if cp.empty or "form_vs_peer_3d" not in cp.columns:
+        return cp
+    flagged = cp[
+        (cp["form_vs_peer_3d"] <= -1) & (cp["peer_3d_confidence"] >= 0.5)
+    ].copy()
+    cols = [
+        c
+        for c in [
+            "org_name", "org_type_classified", "federal_district", "region",
+            "cash_receipts", "staff_avg", "fkhz_count",
+            "svk_form_level", "svk_form_name", "peer_3d_form_median", "form_vs_peer_3d",
+            "form_vs_peer", "profile_skew_3d", "profile_skew_3d_axis",
+            "peer_3d_confidence", "peer_3d_group_size", "peer_3d_mean_distance",
+        ]
+        if c in flagged.columns
+    ]
+    return flagged.sort_values(
+        ["form_vs_peer_3d", "peer_3d_confidence"],
+        ascending=[True, False],
+    )[cols].reset_index(drop=True)
+
+
+def get_cloud_peer_neighbor_names(pa: pd.DataFrame, org_name: str) -> list[str]:
+    """Return neighbor organization names for a selected org."""
+    if pa is None or pa.empty or "org_name" not in pa.columns:
+        return []
+    rows = pa.loc[pa["org_name"].astype(str) == str(org_name), "peer_3d_neighbors"]
+    if rows.empty:
+        return []
+    raw = rows.iloc[0]
+    if pd.isna(raw):
+        return []
+    return [part.strip() for part in str(raw).split(";") if part.strip()]
+
+
+# --- Профиль масштаба: ось роста PC1 и бинная сводка по форме СВК ----------------
+
+_SCALE_PROFILE_AXES = ["cash_receipts", "staff_avg", "fkhz_count"]
+_SCALE_PROFILE_N_BINS_COUNT = 12
+_SCALE_PROFILE_N_BINS_SHARE = 10
+_SCALE_PROFILE_LOW_N = 10
+_SCALE_PROFILE_MIN_ORGS = 20
+
+
+def _aggregate_scale_bins(
+    orgs: pd.DataFrame,
+    bin_col: str,
+    filled_index: pd.Index,
+    log_arr: np.ndarray,
+    form_levels: pd.Series,
+) -> list[dict[str, Any]]:
+    """Aggregate per-bin stats for scale-axis profile."""
+    bin_rows: list[dict[str, Any]] = []
+    for bin_interval, group in orgs.groupby(bin_col, observed=True):
+        g_idx = group.index
+        log_bin = log_arr[filled_index.get_indexer(g_idx)]
+        centroid = log_bin.mean(axis=0)
+        typical = np.expm1(centroid)
+
+        forms = form_levels.loc[g_idx]
+        valid_forms = forms.dropna()
+        row: dict[str, Any] = {
+            "signed_scale_mid": float(bin_interval.mid),
+            "typical_cash": float(typical[0]),
+            "typical_staff": float(typical[1]),
+            "typical_fkhz": float(typical[2]),
+            "n": int(len(group)),
+            "form_median": float(valid_forms.median()) if not valid_forms.empty else np.nan,
+            "form_q25": float(valid_forms.quantile(0.25)) if not valid_forms.empty else np.nan,
+            "form_q75": float(valid_forms.quantile(0.75)) if not valid_forms.empty else np.nan,
+            "low_n": int(len(group)) < _SCALE_PROFILE_LOW_N,
+        }
+        for level in range(5):
+            if valid_forms.empty:
+                row[f"form_share_{level}"] = np.nan
+            else:
+                row[f"form_share_{level}"] = float((valid_forms == level).mean())
+        bin_rows.append(row)
+    return bin_rows
+
+
+def scale_axis_profile(
+    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+) -> dict[str, pd.DataFrame]:
+    """Scale-axis profile: PC1 of standardized ln(1+x) coords and dual bin summaries.
+
+    Returns ``bins_count`` (equal-width ``pd.cut``), ``bins_share`` (equal-count ``pd.qcut``),
+    and ``orgs`` (organizations with ``signed_scale``).
+    """
+    _ = scoring_config  # reserved for future config hooks
+    empty = {
+        "bins_count": pd.DataFrame(),
+        "bins_share": pd.DataFrame(),
+        "orgs": pd.DataFrame(),
+    }
+    filled = _filled_df(df)
+    if len(filled) < _SCALE_PROFILE_MIN_ORGS:
+        return empty
+    if any(ax not in filled.columns for ax in _SCALE_PROFILE_AXES):
+        return empty
+
+    log_arr = np.column_stack(
+        [
+            np.log1p(_safe_num(filled, ax).clip(lower=0).fillna(0).to_numpy(dtype="float64"))
+            for ax in _SCALE_PROFILE_AXES
+        ]
+    )
+
+    std = log_arr.std(axis=0, ddof=1)
+    std[std == 0] = 1.0
+    z = (log_arr - log_arr.mean(axis=0)) / std
+    cov = np.cov(z.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    pc1 = eigvecs[:, int(np.argmax(eigvals))]
+    if pc1.sum() < 0:
+        pc1 = -pc1
+    scores = z @ pc1
+
+    orgs = filled.copy()
+    orgs["signed_scale"] = scores
+
+    has_form = "svk_form_level" in orgs.columns
+    form_levels = (
+        pd.to_numeric(orgs["svk_form_level"], errors="coerce")
+        if has_form
+        else pd.Series(np.nan, index=orgs.index)
+    )
+
+    count_rows: list[dict[str, Any]] = []
+    share_rows: list[dict[str, Any]] = []
+    try:
+        orgs["_bin_count"] = pd.cut(
+            orgs["signed_scale"],
+            bins=_SCALE_PROFILE_N_BINS_COUNT,
+        )
+        count_rows = _aggregate_scale_bins(
+            orgs, "_bin_count", filled.index, log_arr, form_levels
+        )
+    except ValueError:
+        pass
+
+    try:
+        orgs["_bin_share"] = pd.qcut(
+            orgs["signed_scale"],
+            q=_SCALE_PROFILE_N_BINS_SHARE,
+            duplicates="drop",
+        )
+        share_rows = _aggregate_scale_bins(
+            orgs, "_bin_share", filled.index, log_arr, form_levels
+        )
+    except ValueError:
+        pass
+
+    if not count_rows and not share_rows:
+        return empty
+
+    drop_cols = [c for c in ("_bin_count", "_bin_share") if c in orgs.columns]
+    orgs_out = orgs.drop(columns=drop_cols).reset_index(drop=True)
+    bins_count = (
+        pd.DataFrame(count_rows).sort_values("signed_scale_mid").reset_index(drop=True)
+        if count_rows
+        else pd.DataFrame()
+    )
+    bins_share = (
+        pd.DataFrame(share_rows).sort_values("signed_scale_mid").reset_index(drop=True)
+        if share_rows
+        else pd.DataFrame()
+    )
+    return {"bins_count": bins_count, "bins_share": bins_share, "orgs": orgs_out}

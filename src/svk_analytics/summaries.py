@@ -823,6 +823,69 @@ def split_extreme_values(
     return kept.reset_index(drop=True), extreme.reset_index(drop=True)
 
 
+def split_profile_outliers(
+    df: pd.DataFrame,
+    low_percentiles: float | dict[str, float] = 0.005,
+    high_percentiles: float | dict[str, float] = 0.995,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a frame into (kept, trimmed) by two-sided percentiles on three FHD axes.
+
+    An organization is trimmed if at least one axis value is below the lower percentile
+    threshold or above the upper percentile threshold for that axis.
+    ``trimmed`` gets a ``profile_trim_reason`` column.
+    """
+    if df is None or df.empty:
+        empty = df if df is not None else pd.DataFrame()
+        return empty, empty.iloc[0:0] if not empty.empty else empty
+
+    def _pct_for(col: str, spec: float | dict[str, float], default: float) -> float:
+        raw = spec.get(col, default) if isinstance(spec, dict) else spec
+        return min(max(float(raw), 0.0), 1.0)
+
+    low_thresholds: dict[str, float] = {}
+    high_thresholds: dict[str, float] = {}
+    low_pcts: dict[str, float] = {}
+    high_pcts: dict[str, float] = {}
+    trim_mask = pd.Series(False, index=df.index)
+    for col, _label in ANOMALY_AXES:
+        if col not in df.columns:
+            continue
+        s = pd.to_numeric(df[col], errors="coerce")
+        lo_pct = _pct_for(col, low_percentiles, 0.005)
+        hi_pct = _pct_for(col, high_percentiles, 0.995)
+        lo = s.quantile(lo_pct)
+        hi = s.quantile(hi_pct)
+        low_thresholds[col] = lo
+        high_thresholds[col] = hi
+        low_pcts[col] = lo_pct
+        high_pcts[col] = hi_pct
+        trim_mask = trim_mask | (s < lo) | (s > hi)
+
+    def _reason(row: pd.Series) -> str:
+        parts: list[str] = []
+        for col, label in ANOMALY_AXES:
+            lo = low_thresholds.get(col)
+            hi = high_thresholds.get(col)
+            v = row.get(col)
+            if lo is None or hi is None or pd.isna(v):
+                continue
+            if v < lo:
+                parts.append(
+                    f"{label}: {v:,.0f} (ниже p{low_pcts[col] * 100:.1f}%, порог {lo:,.0f})"
+                )
+            elif v > hi:
+                parts.append(
+                    f"{label}: {v:,.0f} (выше p{high_pcts[col] * 100:.1f}%, порог {hi:,.0f})"
+                )
+        return "; ".join(parts)
+
+    trimmed = df[trim_mask].copy()
+    if not trimmed.empty:
+        trimmed["profile_trim_reason"] = trimmed.apply(_reason, axis=1)
+    kept = df[~trim_mask].copy()
+    return kept.reset_index(drop=True), trimmed.reset_index(drop=True)
+
+
 # --- Сравнение с аналогами в 3D-облаке (k ближайших соседей по трём осям ФХД) -------
 
 _CLOUD_PEER_AXIS_LABELS: dict[str, str] = {
@@ -962,10 +1025,24 @@ def get_cloud_peer_neighbor_names(pa: pd.DataFrame, org_name: str) -> list[str]:
 # --- Профиль масштаба: ось роста PC1 и бинная сводка по форме СВК ----------------
 
 _SCALE_PROFILE_AXES = ["cash_receipts", "staff_avg", "fkhz_count"]
-_SCALE_PROFILE_N_BINS_COUNT = 12
-_SCALE_PROFILE_N_BINS_SHARE = 10
+_SCALE_PROFILE_N_BINS_DEFAULT = 12
+_SCALE_PROFILE_N_BINS_MIN = 6
+_SCALE_PROFILE_N_BINS_MAX = 24
 _SCALE_PROFILE_LOW_N = 10
 _SCALE_PROFILE_MIN_ORGS = 20
+
+
+def _scale_profile_n_bins(
+    scoring_config: dict[str, Any] | None,
+    override: int | None = None,
+) -> int:
+    """Resolve bin count: UI override → scoring_config → default, clamped to allowed range."""
+    if override is not None:
+        raw = int(override)
+    else:
+        cfg = (scoring_config or {}).get("scale_profile", {})
+        raw = int(cfg.get("n_bins", _SCALE_PROFILE_N_BINS_DEFAULT))
+    return min(max(raw, _SCALE_PROFILE_N_BINS_MIN), _SCALE_PROFILE_N_BINS_MAX)
 
 
 def _aggregate_scale_bins(
@@ -990,11 +1067,22 @@ def _aggregate_scale_bins(
         form_median = float(valid_forms.median()) if not valid_forms.empty else np.nan
         if round_form_median and not np.isnan(form_median):
             form_median = int(round(form_median))
+        cash = pd.to_numeric(group["cash_receipts"], errors="coerce")
+        staff = pd.to_numeric(group["staff_avg"], errors="coerce")
+        fkhz = pd.to_numeric(group["fkhz_count"], errors="coerce")
         row: dict[str, Any] = {
             "signed_scale_mid": float(bin_interval.mid),
+            "signed_scale_left": float(bin_interval.left),
+            "signed_scale_right": float(bin_interval.right),
             "typical_cash": float(typical[0]),
             "typical_staff": float(typical[1]),
             "typical_fkhz": float(typical[2]),
+            "cash_min": float(cash.min()) if cash.notna().any() else np.nan,
+            "cash_max": float(cash.max()) if cash.notna().any() else np.nan,
+            "staff_min": float(staff.min()) if staff.notna().any() else np.nan,
+            "staff_max": float(staff.max()) if staff.notna().any() else np.nan,
+            "fkhz_min": float(fkhz.min()) if fkhz.notna().any() else np.nan,
+            "fkhz_max": float(fkhz.max()) if fkhz.notna().any() else np.nan,
             "n": int(len(group)),
             "form_median": form_median,
             "form_q25": float(valid_forms.quantile(0.25)) if not valid_forms.empty else np.nan,
@@ -1010,19 +1098,68 @@ def _aggregate_scale_bins(
     return bin_rows
 
 
+def _build_scale_bin_orgs(
+    active_orgs: pd.DataFrame,
+    bin_col: str,
+    bins_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Per-organization rows with bin assignment and axis values."""
+    if active_orgs.empty or bins_df.empty or bin_col not in active_orgs.columns:
+        return pd.DataFrame()
+
+    bin_meta = bins_df[
+        [
+            "bin_idx",
+            "signed_scale_mid",
+            "signed_scale_left",
+            "signed_scale_right",
+        ]
+    ].copy()
+    work = active_orgs.copy()
+    work["_bin_mid"] = work[bin_col].apply(
+        lambda iv: float(iv.mid) if pd.notna(iv) else np.nan
+    )
+    merged = work.merge(bin_meta, left_on="_bin_mid", right_on="signed_scale_mid", how="inner")
+
+    out_cols = [
+        "bin_idx",
+        "signed_scale_left",
+        "signed_scale_right",
+        "signed_scale_mid",
+        "signed_scale",
+        "org_name",
+        "cash_receipts",
+        "staff_avg",
+        "fkhz_count",
+        "svk_form_level",
+        "svk_form_name",
+    ]
+    present = [c for c in out_cols if c in merged.columns]
+    out = merged[present].sort_values(
+        ["bin_idx", "signed_scale"], ascending=[True, True]
+    ).reset_index(drop=True)
+    return out
+
+
 def scale_axis_profile(
-    df: pd.DataFrame, scoring_config: dict[str, Any] | None = None
+    df: pd.DataFrame,
+    scoring_config: dict[str, Any] | None = None,
+    *,
+    n_bins: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Scale-axis profile: PC1 of standardized ln(1+x) coords and dual bin summaries.
 
-    Returns ``bins_count`` (equal-width ``pd.cut``), ``bins_share`` (equal-count ``pd.qcut``),
-    and ``orgs`` (organizations with ``signed_scale`` and ``active`` flag).
+    Returns ``bins_count`` (equal-width ``pd.cut`` with rounded ``form_median``),
+    ``bins_share`` (same bins, float ``form_median`` for stacked shares),
+    ``orgs`` (organizations with ``signed_scale`` and ``active`` flag),
+    and ``bin_orgs`` (active organizations with bin assignment).
     """
-    _ = scoring_config  # reserved for future config hooks
+    n_bins_resolved = _scale_profile_n_bins(scoring_config, n_bins)
     empty = {
         "bins_count": pd.DataFrame(),
         "bins_share": pd.DataFrame(),
         "orgs": pd.DataFrame(),
+        "bin_orgs": pd.DataFrame(),
     }
     filled = _filled_df(df)
     if len(filled) < _SCALE_PROFILE_MIN_ORGS:
@@ -1073,51 +1210,58 @@ def scale_axis_profile(
     active_orgs = orgs.loc[active_mask].copy()
     count_rows: list[dict[str, Any]] = []
     share_rows: list[dict[str, Any]] = []
+    bin_orgs = pd.DataFrame()
     try:
         active_orgs["_bin_count"] = pd.cut(
             active_orgs["signed_scale"],
-            bins=_SCALE_PROFILE_N_BINS_COUNT,
+            bins=n_bins_resolved,
         )
-        count_rows = _aggregate_scale_bins(
+        share_rows = _aggregate_scale_bins(
             active_orgs,
             "_bin_count",
             active_index,
             log_arr,
             form_levels,
-            round_form_median=True,
         )
-    except ValueError:
-        pass
-
-    try:
-        active_orgs["_bin_share"] = pd.qcut(
-            active_orgs["signed_scale"],
-            q=_SCALE_PROFILE_N_BINS_SHARE,
-            duplicates="drop",
-        )
-        share_rows = _aggregate_scale_bins(
-            active_orgs,
-            "_bin_share",
-            active_index,
-            log_arr,
-            form_levels,
-        )
+        count_rows = []
+        for row in share_rows:
+            count_row = dict(row)
+            median = count_row.get("form_median")
+            if median is not None and not np.isnan(median):
+                count_row["form_median"] = int(round(float(median)))
+            count_rows.append(count_row)
     except ValueError:
         pass
 
     if not count_rows and not share_rows:
         return empty
 
-    drop_cols = [c for c in ("_bin_count", "_bin_share") if c in orgs.columns]
-    orgs_out = orgs.drop(columns=drop_cols).reset_index(drop=True)
-    bins_count = (
-        pd.DataFrame(count_rows).sort_values("signed_scale_mid").reset_index(drop=True)
-        if count_rows
-        else pd.DataFrame()
-    )
     bins_share = (
         pd.DataFrame(share_rows).sort_values("signed_scale_mid").reset_index(drop=True)
         if share_rows
         else pd.DataFrame()
     )
-    return {"bins_count": bins_count, "bins_share": bins_share, "orgs": orgs_out}
+    bins_count = (
+        pd.DataFrame(count_rows).sort_values("signed_scale_mid").reset_index(drop=True)
+        if count_rows
+        else pd.DataFrame()
+    )
+    if not bins_share.empty:
+        bins_share["bin_idx"] = range(len(bins_share))
+    if not bins_count.empty:
+        bins_count["bin_idx"] = range(len(bins_count))
+        bin_orgs = _build_scale_bin_orgs(active_orgs, "_bin_count", bins_count)
+        scale_bin_mid = active_orgs["_bin_count"].apply(
+            lambda iv: float(iv.mid) if pd.notna(iv) else np.nan
+        )
+        orgs["scale_bin_mid"] = np.nan
+        orgs.loc[active_mask, "scale_bin_mid"] = scale_bin_mid
+
+    drop_cols = [c for c in ("_bin_count", "scale_bin_mid") if c in orgs.columns]
+    orgs_out = orgs.drop(columns=drop_cols, errors="ignore").reset_index(drop=True)
+    return {
+        "bins_count": bins_count,
+        "bins_share": bins_share,
+        "orgs": orgs_out,
+        "bin_orgs": bin_orgs,
+    }

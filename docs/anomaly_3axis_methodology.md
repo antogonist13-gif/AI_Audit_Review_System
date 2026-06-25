@@ -6,6 +6,9 @@
 **Реализация:** `src/svk_analytics/summaries.py` → `proportionality_anomalies()`,
 `proportionality_anomalies_table()`
 **Интерфейс:** `app.py` → вкладка «Аномалии (3D)»
+
+> **UI:** блок аномалий на вкладке «Распределение 3D» заменён сравнением с аналогами в облаке (`cloud_peer_benchmark`). Функция `proportionality_anomalies()` сохранена в коде.
+
 **Связанные документы:** `docs/metric_passport.md`, `docs/form_proportionality_methodology.md`
 
 > Блок аддитивный: он не изменяет исходный набор данных и не влияет на расчёт

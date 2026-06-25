@@ -40,8 +40,17 @@ from src.svk_analytics.summaries import (
     violations_and_remediation,
     violations_summary,
 )
+import importlib
+from src.svk_analytics import summaries as _summaries_mod
 
 st.set_page_config(page_title="СВК Analytics", layout="wide")
+
+
+def _split_profile_outliers(*args, **kwargs):
+    """Reload summaries if Streamlit kept a stale module without split_profile_outliers."""
+    if not hasattr(_summaries_mod, "split_profile_outliers"):
+        importlib.reload(_summaries_mod)
+    return _summaries_mod.split_profile_outliers(*args, **kwargs)
 
 
 @st.cache_data(show_spinner=False)
@@ -649,15 +658,98 @@ with tab8:
         st.markdown("### Профиль масштаба: концентрация и форма СВК")
         st.caption(
             "Ось масштаба — направление роста по трём показателям ФХД в ln(1+x)-пространстве "
-            "(первая главная компонента). Ноль — центр облака (типичный масштаб выборки); "
-            "отрицательные значения — мельче типичного, положительные — крупнее. "
-            "Графики показывают, где сосредоточены организации и как меняется медиана формы СВК по масштабу. "
+            "(первая главная компонента). Отрицательные значения — мельче типичного по оси, "
+            "положительные — крупнее. Графики показывают, где сосредоточены организации и как "
+            "меняется медиана формы СВК по масштабу. Карточки «типичных» показателей и вертикальная "
+            "линия на графике — бин с максимальной концентрацией организаций. "
             "Организации без положительных значений по всем трём осям исключаются из расчёта оси и бинов."
         )
 
-        sp = scale_axis_profile(filtered, scoring_config)
+        trim_profile = st.checkbox(
+            "Отсекать выбросы профиля",
+            value=True,
+            key="sp_trim_outliers",
+            help=(
+                "Организации ниже нижнего или выше верхнего перцентильного порога хотя бы по одной "
+                "из трёх осей исключаются из расчёта профиля масштаба и выносятся в таблицу на проверку."
+            ),
+        )
+        sp_low_cash, sp_low_staff, sp_low_fkhz = st.columns(3)
+        with sp_low_cash:
+            sp_pct_low_cash = st.slider(
+                "Нижний порог: кассовые поступления, перцентиль",
+                min_value=0.1, max_value=10.0, value=0.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_low_cash",
+            )
+        with sp_low_staff:
+            sp_pct_low_staff = st.slider(
+                "Нижний порог: численность, перцентиль",
+                min_value=0.1, max_value=10.0, value=0.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_low_staff",
+            )
+        with sp_low_fkhz:
+            sp_pct_low_fkhz = st.slider(
+                "Нижний порог: факты ФХЖ, перцентиль",
+                min_value=0.1, max_value=10.0, value=0.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_low_fkhz",
+            )
+        sp_high_cash, sp_high_staff, sp_high_fkhz = st.columns(3)
+        with sp_high_cash:
+            sp_pct_high_cash = st.slider(
+                "Верхний порог: кассовые поступления, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_high_cash",
+            )
+        with sp_high_staff:
+            sp_pct_high_staff = st.slider(
+                "Верхний порог: численность, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_high_staff",
+            )
+        with sp_high_fkhz:
+            sp_pct_high_fkhz = st.slider(
+                "Верхний порог: факты ФХЖ, перцентиль",
+                min_value=90.0, max_value=99.9, value=99.5, step=0.1,
+                disabled=not trim_profile,
+                key="sp_pct_high_fkhz",
+            )
+
+        if trim_profile:
+            sp_kept, sp_trimmed = _split_profile_outliers(
+                filtered,
+                low_percentiles={
+                    "cash_receipts": sp_pct_low_cash / 100.0,
+                    "staff_avg": sp_pct_low_staff / 100.0,
+                    "fkhz_count": sp_pct_low_fkhz / 100.0,
+                },
+                high_percentiles={
+                    "cash_receipts": sp_pct_high_cash / 100.0,
+                    "staff_avg": sp_pct_high_staff / 100.0,
+                    "fkhz_count": sp_pct_high_fkhz / 100.0,
+                },
+            )
+        else:
+            sp_kept, sp_trimmed = filtered, filtered.iloc[0:0]
+
+        sp_n_bins_default = int(scoring_config.get("scale_profile", {}).get("n_bins", 12))
+        sp_n_bins = st.slider(
+            "Число бинов по оси масштаба",
+            min_value=6,
+            max_value=24,
+            value=min(max(sp_n_bins_default, 6), 24),
+            step=1,
+            key="sp_n_bins",
+            help="Больше бинов — уже интервалы (детальнее); меньше — шире (обобщённее).",
+        )
+        sp = scale_axis_profile(sp_kept, scoring_config, n_bins=sp_n_bins)
         sp_bins_count = sp.get("bins_count", sp.get("bins", pd.DataFrame()))
         sp_bins_share = sp.get("bins_share", sp.get("bins", pd.DataFrame()))
+        sp_bin_orgs = sp.get("bin_orgs", pd.DataFrame())
         sp_orgs = sp["orgs"]
         sp_active = (
             sp_orgs.loc[sp_orgs["active"]]
@@ -684,7 +776,12 @@ with tab8:
             if scores_std <= 0:
                 scores_std = 1.0
 
-            if not sp_active.empty:
+            if not sp_bins_count.empty:
+                peak_row = sp_bins_count.loc[sp_bins_count["n"].idxmax()]
+                center_cash = float(peak_row["typical_cash"])
+                center_staff = float(peak_row["typical_staff"])
+                center_fkhz = float(peak_row["typical_fkhz"])
+            elif not sp_active.empty:
                 center_cash = np.expm1(
                     np.log1p(pd.to_numeric(sp_active["cash_receipts"], errors="coerce").fillna(0)).mean()
                 )
@@ -694,7 +791,10 @@ with tab8:
                 center_fkhz = np.expm1(
                     np.log1p(pd.to_numeric(sp_active["fkhz_count"], errors="coerce").fillna(0)).mean()
                 )
+            else:
+                center_cash = center_staff = center_fkhz = None
 
+            if center_cash is not None:
                 k1, k2, k3 = st.columns(3)
                 with k1:
                     metric_card("Типичные поступления", f"≈ {center_cash / 1e6:,.0f} млн руб.")
@@ -702,6 +802,11 @@ with tab8:
                     metric_card("Типичная численность", f"≈ {center_staff:,.0f} чел.")
                 with k3:
                     metric_card("Типичные факты ФХЖ", f"≈ {center_fkhz:,.0f} ед.")
+                if not sp_bins_count.empty:
+                    st.caption(
+                        f"По бину максимальной концентрации: n={int(peak_row['n'])}, "
+                        f"медиана формы СВК {int(peak_row['form_median'])}."
+                    )
 
             def _sigma_label(mid: float) -> str:
                 if abs(mid) < 1e-9:
@@ -728,20 +833,38 @@ with tab8:
                 ]
                 x_pos = list(range(len(bins_df)))
                 x_axis = dict(tickmode="array", tickvals=x_pos, ticktext=x_labels)
-                center_idx = int(np.argmin(np.abs(bins_df["signed_scale_mid"].to_numpy())))
-                return x_pos, x_axis, center_idx
+                peak_idx = int(bins_df["n"].to_numpy().argmax())
+                return x_pos, x_axis, peak_idx
+
+            def _scale_range_label(left: float, right: float) -> str:
+                return f"{left:.2f} … {right:.2f}"
+
+            def _cash_range_label(lo: float, hi: float) -> str:
+                return f"{lo / 1e6:,.1f}–{hi / 1e6:,.1f} млн руб"
+
+            def _bin_hover_text(row: pd.Series, low: bool) -> str:
+                lines = [
+                    f"Медиана формы: {row['form_median']:.0f} | n={int(row['n'])}",
+                    f"Масштаб: {_scale_range_label(row['signed_scale_left'], row['signed_scale_right'])}",
+                    f"Поступления: {_cash_range_label(row['cash_min'], row['cash_max'])}",
+                    f"Численность: {row['staff_min']:,.0f}–{row['staff_max']:,.0f} чел",
+                    f"ФХЖ: {row['fkhz_min']:,.0f}–{row['fkhz_max']:,.0f} ед",
+                ]
+                if low:
+                    lines.append("<b>n мало</b>")
+                return "<br>".join(lines)
+
+            scale_bins = sp_bins_count if not sp_bins_count.empty else sp_bins_share
+            if not scale_bins.empty:
+                x_pos_scale, x_axis_scale, peak_idx_scale = _scale_x_axis(scale_bins)
+                share_df = sp_bins_share if not sp_bins_share.empty else sp_bins_count
 
             if not sp_bins_count.empty:
-                x_pos_count, x_axis_count, center_idx_count = _scale_x_axis(sp_bins_count)
+                x_pos_count, x_axis_count, peak_idx_count = x_pos_scale, x_axis_scale, peak_idx_scale
                 bar_opacity = [0.5 if low else 1.0 for low in sp_bins_count["low_n"]]
                 bar_hover = [
-                    (
-                        f"Медиана формы: {m:.1f}<br>Организаций: {n}"
-                        + ("<br><b>n мало</b>" if low else "")
-                    )
-                    for m, n, low in zip(
-                        sp_bins_count["form_median"], sp_bins_count["n"], sp_bins_count["low_n"]
-                    )
+                    _bin_hover_text(sp_bins_count.iloc[i], bool(sp_bins_count["low_n"].iloc[i]))
+                    for i in range(len(sp_bins_count))
                 ]
 
                 fig_scale_n = go.Figure(
@@ -770,11 +893,11 @@ with tab8:
                     )
                 )
                 fig_scale_n.add_vline(
-                    x=center_idx_count,
+                    x=peak_idx_count,
                     line_width=1.5,
                     line_dash="dash",
                     line_color="gray",
-                    annotation_text="Центр облака",
+                    annotation_text="Максимум концентрации",
                     annotation_position="top",
                 )
                 fig_scale_n.update_layout(
@@ -785,16 +908,15 @@ with tab8:
                 )
                 st.plotly_chart(fig_scale_n, use_container_width=True)
 
-            if not sp_bins_share.empty:
-                x_pos_share, x_axis_share, center_idx_share = _scale_x_axis(sp_bins_share)
+            if not sp_bins_count.empty and not share_df.empty:
                 fig_scale_share = go.Figure()
                 for level in range(5):
-                    share_pct = sp_bins_share[f"form_share_{level}"] * 100
-                    count_in_bin = (sp_bins_share[f"form_share_{level}"] * sp_bins_share["n"]).round(0)
+                    share_pct = share_df[f"form_share_{level}"] * 100
+                    count_in_bin = (share_df[f"form_share_{level}"] * share_df["n"]).round(0)
                     fig_scale_share.add_trace(
                         go.Bar(
                             name=f"{level} — {_form_name(level)}",
-                            x=x_pos_share,
+                            x=x_pos_scale,
                             y=share_pct,
                             marker_color=_FORM_COLORS[level],
                             customdata=count_in_bin,
@@ -807,21 +929,147 @@ with tab8:
                         )
                     )
                 fig_scale_share.add_vline(
-                    x=center_idx_share,
+                    x=peak_idx_scale,
                     line_width=1.5,
                     line_dash="dash",
                     line_color="gray",
+                    annotation_text="Максимум концентрации",
+                    annotation_position="top",
                 )
                 fig_scale_share.update_layout(
                     barmode="stack",
                     title="Структура форм СВК по уровням масштаба",
-                    xaxis=dict(title="Позиция по оси масштаба", **x_axis_share),
+                    xaxis=dict(title="Позиция по оси масштаба", **x_axis_scale),
                     yaxis_title="Доля организаций, %",
                     yaxis=dict(range=[0, 100]),
                     legend_title="Форма СВК",
                     height=480,
                 )
                 st.plotly_chart(fig_scale_share, use_container_width=True)
+
+            if not sp_bins_count.empty:
+                st.markdown("#### Состав бинов: границы показателей")
+                st.caption(
+                    "Для каждого столбца гистограммы — диапазон позиции по оси масштаба "
+                    "и min/max трёх показателей ФХД среди организаций бина."
+                )
+                bins_summary = sp_bins_count[
+                    [
+                        "bin_idx",
+                        "signed_scale_left",
+                        "signed_scale_right",
+                        "cash_min",
+                        "cash_max",
+                        "staff_min",
+                        "staff_max",
+                        "fkhz_min",
+                        "fkhz_max",
+                        "n",
+                        "form_median",
+                    ]
+                ].copy()
+                bins_summary.insert(0, "Бин", bins_summary["bin_idx"] + 1)
+                bins_summary["Масштаб"] = bins_summary.apply(
+                    lambda r: _scale_range_label(r["signed_scale_left"], r["signed_scale_right"]),
+                    axis=1,
+                )
+                bins_summary["Поступления, млн руб"] = bins_summary.apply(
+                    lambda r: f"{r['cash_min'] / 1e6:,.1f} – {r['cash_max'] / 1e6:,.1f}",
+                    axis=1,
+                )
+                bins_summary["Численность, чел"] = bins_summary.apply(
+                    lambda r: f"{r['staff_min']:,.0f} – {r['staff_max']:,.0f}",
+                    axis=1,
+                )
+                bins_summary["ФХЖ, ед"] = bins_summary.apply(
+                    lambda r: f"{r['fkhz_min']:,.0f} – {r['fkhz_max']:,.0f}",
+                    axis=1,
+                )
+                bins_summary = bins_summary.rename(columns={"n": "Организаций", "form_median": "Медиана формы"})
+                st.dataframe(
+                    bins_summary[
+                        [
+                            "Бин",
+                            "Масштаб",
+                            "Поступления, млн руб",
+                            "Численность, чел",
+                            "ФХЖ, ед",
+                            "Организаций",
+                            "Медиана формы",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                if not sp_bin_orgs.empty:
+                    bin_options = {
+                        int(row["bin_idx"]): (
+                            f"Бин {int(row['bin_idx']) + 1}: "
+                            f"{_sigma_label(row['signed_scale_mid'])} "
+                            f"({int(row['n'])} орг.)"
+                        )
+                        for _, row in sp_bins_count.iterrows()
+                    }
+                    selected_bin_idx = st.selectbox(
+                        "Организации в бине",
+                        options=list(bin_options.keys()),
+                        format_func=lambda idx: bin_options[idx],
+                        key="sp_bin_orgs_select",
+                    )
+                    bin_detail_cols = [
+                        c
+                        for c in [
+                            "org_name",
+                            "cash_receipts",
+                            "staff_avg",
+                            "fkhz_count",
+                            "svk_form_name",
+                            "signed_scale",
+                        ]
+                        if c in sp_bin_orgs.columns
+                    ]
+                    bin_detail = sp_bin_orgs.loc[
+                        sp_bin_orgs["bin_idx"] == selected_bin_idx, bin_detail_cols
+                    ].sort_values("signed_scale")
+                    st.dataframe(bin_detail, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "Скачать организации бина CSV",
+                        data=bin_detail.to_csv(index=False, encoding="utf-8-sig"),
+                        file_name=f"scale_profile_bin_{selected_bin_idx + 1}.csv",
+                        mime="text/csv",
+                        key="sp_bin_orgs_csv",
+                    )
+
+        if trim_profile and not sp_trimmed.empty:
+            st.markdown("#### Отсечённые организации — вынесены на проверку")
+            st.caption(
+                "Организации ниже нижнего или выше верхнего перцентильного порога хотя бы по одной "
+                "из трёх осей. Исключены из расчёта профиля масштаба; рекомендуется проверить исходные данные."
+            )
+            sp_trim_cols = [
+                c
+                for c in [
+                    "org_name", "org_type_classified", "federal_district", "region",
+                    "cash_receipts", "staff_avg", "fkhz_count",
+                    "svk_form_name", "profile_trim_reason",
+                ]
+                if c in sp_trimmed.columns
+            ]
+            st.dataframe(sp_trimmed[sp_trim_cols], use_container_width=True)
+            st.download_button(
+                "Скачать отсечённые организации CSV",
+                data=sp_trimmed[sp_trim_cols].to_csv(index=False, encoding="utf-8-sig"),
+                file_name="scale_profile_trimmed.csv",
+                mime="text/csv",
+                key="sp_trimmed_csv",
+            )
+            st.info(
+                f"Отсечено организаций: {len(sp_trimmed)} из {len(filtered)} "
+                f"(нижние пороги: поступления {sp_pct_low_cash:.1f}%, численность {sp_pct_low_staff:.1f}%, "
+                f"ФХЖ {sp_pct_low_fkhz:.1f}%; верхние: {sp_pct_high_cash:.1f}%, {sp_pct_high_staff:.1f}%, "
+                f"{sp_pct_high_fkhz:.1f}%)."
+            )
 
         st.markdown("---")
 

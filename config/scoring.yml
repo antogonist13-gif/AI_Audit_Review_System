@@ -20,6 +20,14 @@ complexity_bump:
 peer_benchmark:
   # Минимальный размер группы аналогов; при нехватке — откат к более грубой группировке.
   min_group_size: 5
+  cloud_3d:
+    # k ближайших соседей в ln(1+x)-пространстве трёх осей ФХД (вкладка «Распределение 3D»).
+    coords: log1p
+    distance: euclidean
+
+scale_profile:
+  # Число равношироких бинов pd.cut по оси signed_scale (вкладка «Профиль масштаба»; в UI 6–24).
+  n_bins: 12
 
 forms:
   form_responsible_person:

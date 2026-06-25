@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 import tempfile
+
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -30,6 +35,7 @@ from src.svk_analytics.summaries import (
     proportionality_anomalies,
     scale_axis_profile,
     split_extreme_values,
+    split_profile_outliers,
     report_status_summary,
     risk_group_summary,
     risk_methodology_summary,
@@ -40,17 +46,8 @@ from src.svk_analytics.summaries import (
     violations_and_remediation,
     violations_summary,
 )
-import importlib
-from src.svk_analytics import summaries as _summaries_mod
 
 st.set_page_config(page_title="СВК Analytics", layout="wide")
-
-
-def _split_profile_outliers(*args, **kwargs):
-    """Reload summaries if Streamlit kept a stale module without split_profile_outliers."""
-    if not hasattr(_summaries_mod, "split_profile_outliers"):
-        importlib.reload(_summaries_mod)
-    return _summaries_mod.split_profile_outliers(*args, **kwargs)
 
 
 @st.cache_data(show_spinner=False)
@@ -720,7 +717,7 @@ with tab8:
             )
 
         if trim_profile:
-            sp_kept, sp_trimmed = _split_profile_outliers(
+            sp_kept, sp_trimmed = split_profile_outliers(
                 filtered,
                 low_percentiles={
                     "cash_receipts": sp_pct_low_cash / 100.0,

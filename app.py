@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import textwrap
+import html
 from pathlib import Path
 import tempfile
 
@@ -47,7 +49,10 @@ from src.svk_analytics.summaries import (
     violations_summary,
 )
 
-st.set_page_config(page_title="СВК Analytics", layout="wide")
+st.set_page_config(
+    page_title="Мониторинг организации и осуществления внутреннего контроля организаций, подведомственных Минобрнауки России",
+    layout="wide",
+)
 
 
 @st.cache_data(show_spinner=False)
@@ -96,17 +101,248 @@ def value_from_overview(overview: pd.DataFrame, metric: str):
     return overview.loc[overview["metric"] == metric, "value"].iloc[0]
 
 
+def wrap_plain_text(value, width: int = 34) -> str:
+    text = str(value)
+    return "\n".join(textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False))
+
+
 def metric_card(label: str, value):
-    st.metric(label, value)
+    label_html = "<br>".join(
+        textwrap.wrap(
+            html.escape(str(label)),
+            width=28,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    )
+    value_html = html.escape(str(value))
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="metric-card-label">{label_html}</div>
+            <div class="metric-card-value">{value_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-st.title("СВК Analytics: мониторинг внутреннего контроля")
-st.caption("Интерактивный дашборд по ежегодному сводному отчету")
+DISPLAY_LABELS = {
+    "% заполненных отчетов": "Доля заполненных отчётов",
+    "% организаций, где СВК организован": "Доля организаций, где внутренний контроль организован и осуществляется",
+    "% организаций с полным базовым комплектом СВК": "Доля организаций, где организация внутреннего контроля полностью формализована",
+    "% организаций с полноценной методикой оценки рисков": "Доля организаций, где методика по выявлению и оценке рисков применяется",
+    "% организаций с регулярной оценкой эффективности СВК": "Доля организаций с регулярной оценкой эффективности организации и осуществления внутреннего контроля",
+    "Выявленные нарушения": "Количество выявленных нарушений, ед.",
+    "% нарушений, устраненных в срок": "Доля нарушений, устранённых в срок",
+    "Организаций, где СВК организован": "Количество организаций, где внутренний контроль организован и осуществляется",
+    "Организаций с полным базовым комплектом СВК": "Количество организаций, где организация внутреннего контроля полностью формализована",
+    "Организаций с регулярной оценкой эффективности СВК": "Количество организаций с регулярной оценкой эффективности организации и осуществления внутреннего контроля",
+    "Организаций со слабой формой СВК": "Количество организаций, где форма обеспечения функционирования внутреннего контроля ниже расчётной рекомендации",
+    "СВК организован": "Внутренний контроль организован и осуществляется",
+    "СВК организован и осуществляется": "Внутренний контроль организован и осуществляется",
+    "Раздел СВК в учетной политике": "Раздел/положение об организации и осуществлении внутреннего контроля в учётной политике",
+    "Организация СВК утверждена ЛНА": "Организация и осуществление внутреннего контроля утверждена ЛНА",
+    "СВК утвержден ЛНА": "Организация и осуществление внутреннего контроля утверждена ЛНА",
+    "Определены полномочия": "Определены полномочия ответственных лиц",
+    "План-график мероприятий СВК": "Утверждённый план-график мероприятий по организации и осуществлению внутреннего контроля",
+    "План-график мероприятий": "Утверждённый план-график мероприятий по организации и осуществлению внутреннего контроля",
+    "Уполномоченное должностное лицо": "Уполномоченное должностное лицо",
+    "Назначено уполномоченное должностное лицо": "Уполномоченное должностное лицо",
+    "Временный коллегиальный орган": "Временный коллегиальный орган",
+    "Временный коллегиальный орган / комиссия": "Временный коллегиальный орган",
+    "Постоянный коллегиальный орган": "Постоянный коллегиальный орган",
+    "Постоянно действующий коллегиальный орган": "Постоянный коллегиальный орган",
+    "Структурное подразделение": "Уполномоченное структурное подразделение",
+    "Уполномоченное структурное подразделение": "Уполномоченное структурное подразделение",
+    "Иная форма": "Иная форма",
+    "Иное": "Иная форма",
+    "ФХД": "Финансово-хозяйственная деятельность",
+    "Закупки": "Деятельность по закупкам",
+    "Имущество": "Использование и распоряжение имуществом",
+    "Проекты": "Проектная деятельность",
+    "Количество выявленных нарушений": "Количество выявленных нарушений, ед.",
+    "Устранено в срок": "Из них устранено в срок, ед.",
+    "Устранено с нарушением срока": "Из них устранено с нарушением срока, ед.",
+    "Остаток без отраженного устранения": "Остаток без отражённого устранения, ед.",
+    "Планы устранения": "Количество разработанных планов устранения, ед.",
+    "Изменения в ЛНА": "Количество принятых решений по внесению изменений в ЛНА, ед.",
+    "Дисциплинарные решения": "Количество решений о привлечении к дисциплинарной ответственности, ед.",
+    "Дисциплинарная ответственность: решений принято": "Количество решений о привлечении к дисциплинарной ответственности, ед.",
+    "  → из них отменены в порядке обжалования": "Из них отменены в порядке обжалования",
+    "Отменены в порядке обжалования": "Из них отменены в порядке обжалования",
+    "Материалы в правоохранительные органы": "Количество материалов, направленных в правоохранительные органы и органы госконтроля и надзора, ед.",
+    "Материалы в правоохранительные органы: направлено": "Количество материалов, направленных в правоохранительные органы и органы госконтроля и надзора, ед.",
+    "  → из них возвращены, получен отказ": "Из них возвращены, получен отказ",
+    "Возвращены / отказ": "Из них возвращены, получен отказ",
+    "Материалы в суд": "Количество материалов, направленных в суд, ед.",
+    "Материалы в суд: направлено": "Количество материалов, направленных в суд, ед.",
+    "  → из них отказано в удовлетворении": "Из них отказано в удовлетворении",
+    "Отказано в удовлетворении": "Из них отказано в удовлетворении",
+    "Полноценная методика": "Методика по выявлению и оценке рисков применяется",
+    "полноценная методика": "Методика по выявлению и оценке рисков применяется",
+    "Фрагментарная методика": "Методика применяется фрагментарно",
+    "фрагментарная / несистемная методика": "Методика применяется фрагментарно",
+    "Методика отсутствует": "Методика оценки рисков отсутствует",
+    "методика отсутствует": "Методика оценки рисков отсутствует",
+    "Регулярная оценка": "Регулярная оценка эффективности внутреннего контроля проводится",
+    "регулярная оценка": "Регулярная оценка эффективности внутреннего контроля проводится",
+    "Нерегулярная оценка": "Оценка проводится нерегулярно или результаты не оформляются",
+    "нерегулярная оценка / результаты не оформляются": "Оценка проводится нерегулярно или результаты не оформляются",
+    "Оценка не проводится": "Оценка эффективности внутреннего контроля не проводится",
+    "оценка не проводится": "Оценка эффективности внутреннего контроля не проводится",
+    "Документированные мероприятия реализуются": "Мероприятия по совершенствованию внутреннего контроля реализуются",
+    "документированные мероприятия реализуются": "Мероприятия по совершенствованию внутреннего контроля реализуются",
+    "Мероприятия планируются или выполняются частично": "Мероприятия планируются или выполняются не в полном объёме",
+    "мероприятия планируются или выполняются частично": "Мероприятия планируются или выполняются не в полном объёме",
+    "Мероприятия не планируются": "Мероприятия не планируются и не проводятся",
+    "мероприятия не планируются / не проводятся": "Мероприятия не планируются и не проводятся",
+    "Покрыто": "Включено в контур внутреннего контроля",
+    "Не покрыто": "Не включено в контур внутреннего контроля",
+    "covered_orgs": "Включено в контур внутреннего контроля",
+    "uncovered_orgs": "Не включено в контур внутреннего контроля",
+    "A. Сбалансированная СВК": "Группа A — сбалансированный внутренний контроль (расчётный показатель)",
+    "B. Недопокрытие активных направлений": "Группа B — активные направления контроля вне контура внутреннего контроля (расчётный показатель)",
+    "C. Слабая форма СВК": "Группа C — форма обеспечения функционирования внутреннего контроля ниже расчётной рекомендации",
+    "C. Слабая форма СВК при имеющейся нагрузке": "Группа C — форма обеспечения функционирования внутреннего контроля ниже расчётной рекомендации при имеющейся нагрузке",
+    "D. Двойной риск": "Группа D — двойной расчётный риск",
+    "D. Двойной риск: непокрытие + слабая форма": "Группа D — двойной расчётный риск",
+    "E. Отчет не заполнен / данные требуют проверки": "Группа E — отчёт не заполнен / данные требуют проверки",
+    "E. Отчёт не заполнен / данные требуют проверки": "Группа E — отчёт не заполнен / данные требуют проверки",
+}
+
+DISPLAY_TEXT_REPLACEMENTS = {
+    "форма СВК": "форма обеспечения функционирования внутреннего контроля",
+    "Форма СВК": "Форма обеспечения функционирования внутреннего контроля",
+    "элементы СВК": "элементы организации и осуществления внутреннего контроля",
+    "Элементы СВК": "Элементы организации и осуществления внутреннего контроля",
+    "оценка СВК": "оценка эффективности организации и осуществления внутреннего контроля",
+    "Оценка СВК": "Оценка эффективности организации и осуществления внутреннего контроля",
+    "СВК": "внутренний контроль",
+}
+
+
+def display_label(value):
+    if value is None:
+        return value
+    try:
+        if pd.isna(value):
+            return value
+    except (TypeError, ValueError):
+        pass
+    text = str(value)
+    text = DISPLAY_LABELS.get(text, text)
+    for src, dst in DISPLAY_TEXT_REPLACEMENTS.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def display_form_name(level: int) -> str:
+    """User-facing form label; backend `_form_name(...)` text is not shown directly."""
+    return display_label(_form_name(level))
+
+
+def wrap_display_text(value, width: int = 34) -> str:
+    label = display_label(value)
+    if label is None:
+        return label
+    try:
+        if pd.isna(label):
+            return label
+    except (TypeError, ValueError):
+        pass
+    return "<br>".join(
+        textwrap.wrap(str(label), width=width, break_long_words=False, break_on_hyphens=False)
+    )
+
+
+def chart_title(value: str) -> str:
+    return wrap_display_text(value, width=62)
+
+
+def axis_title(value: str) -> str:
+    return wrap_display_text(value, width=42)
+
+
+def legend_title(value: str) -> str:
+    return wrap_display_text(value, width=30)
+
+
+def add_display_column(df: pd.DataFrame, column: str, display_column: str | None = None) -> pd.DataFrame:
+    result = df.copy()
+    if column in result.columns:
+        out_col = display_column or f"{column}_display"
+        result[out_col] = result[column].map(display_label)
+    return result
+
+
+def add_wrapped_display_column(
+    df: pd.DataFrame,
+    column: str,
+    display_column: str | None = None,
+    width: int = 34,
+) -> pd.DataFrame:
+    result = df.copy()
+    if column in result.columns:
+        out_col = display_column or f"{column}_display"
+        result[out_col] = result[column].map(lambda value: wrap_display_text(value, width=width))
+    return result
+
+
+def with_display_labels(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    result = df.copy()
+    for column in columns:
+        if column in result.columns:
+            result[column] = result[column].map(display_label)
+    return result
+
+
+def with_display_text_columns(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    for column in result.select_dtypes(include=["object", "string"]).columns:
+        result[column] = result[column].map(display_label)
+    return result
+
+
+OFFICIAL_TITLE = "Мониторинг организации и осуществления внутреннего контроля организаций, подведомственных Минобрнауки России"
+
+
+st.title(OFFICIAL_TITLE)
+st.caption("Аналитическая система по ежегодному сводному отчёту организаций, подведомственных Минобрнауки России")
+st.markdown(
+    """
+    <style>
+    .metric-card {
+        min-height: 7rem;
+        padding: 0.65rem 0.8rem 0.75rem 0.8rem;
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 0.5rem;
+        background: rgba(128, 128, 128, 0.06);
+    }
+    .metric-card-label {
+        min-height: 3.6rem;
+        color: inherit;
+        opacity: 0.82;
+        font-size: 0.875rem;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+    }
+    .metric-card-value {
+        color: inherit;
+        font-size: 1.75rem;
+        line-height: 1.2;
+        font-weight: 600;
+        margin-top: 0.2rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
     st.header("Источник данных")
     year = st.number_input("Год анализа", min_value=2020, max_value=2100, value=2025, step=1)
-    uploaded = st.file_uploader("Загрузите годовой отчет", type=["xls", "xlsx", "html", "htm"])
+    uploaded = st.file_uploader("Загрузите отчёт мониторинга", type=["xls", "xlsx", "html", "htm"])
 
     if uploaded is not None:
         suffix = Path(uploaded.name).suffix or ".xls"
@@ -131,7 +367,7 @@ with st.sidebar:
         value=5,
         step=1,
         help=(
-            "Минимальный размер группы аналогов для сравнения в разделах «Соразмерность формы» "
+            "Минимальный размер группы аналогов для сравнения в разделах «Форма обеспечения функционирования внутреннего контроля» "
             "и «Распределение 3D». При нехватке организаций применяется откат к более грубой группировке."
         ),
     )
@@ -141,11 +377,11 @@ with st.sidebar:
         st.rerun()
 
 if not input_path:
-    st.info("👋 Добро пожаловать в СВК Analytics!")
+    st.info("Добро пожаловать в систему мониторинга организации и осуществления внутреннего контроля!")
     st.markdown("""
     ### 📊 Система анализа внутреннего контроля
     
-    Для начала работы загрузите файл отчета через боковую панель слева ⬅️
+    Для начала работы загрузите файл отчёта мониторинга через боковую панель слева
     
     #### Поддерживаемые форматы:
     - `.XLS` (старый формат Excel)
@@ -153,21 +389,21 @@ if not input_path:
     - `.HTML` / `.HTM` (экспорт из веб-форм)
     
     #### Что вы получите:
-    - 📈 **12 ключевых показателей** эффективности СВК
-    - 📊 **7 интерактивных вкладок** с детальной аналитикой
+    - 📈 **12 ключевых показателей** организации и осуществления внутреннего контроля
+    - 📊 **8 интерактивных вкладок** с детальной аналитикой
     - 🔍 **Автоматическое выявление** противоречий и аномалий в данных
-    - 🎯 **Топ-100 организаций** в зоне риска
+    - 🎯 **Организации для управленческого внимания**
     - 📥 **Экспорт результатов** в CSV
     
-    #### Направления анализа:
+    #### Направления контроля:
     1. Финансово-хозяйственная деятельность
-    2. Закупки
-    3. Имущество
+    2. Деятельность по закупкам
+    3. Использование и распоряжение имуществом
     4. Проектная деятельность
     
     ---
     
-    💡 **Совет:** После загрузки файла используйте фильтры в боковой панели для детального анализа по округам, регионам и типам организаций.
+    💡 **Совет:** После загрузки файла используйте фильтры в боковой панели для детального анализа по федеральным округам, субъектам Российской Федерации и типам организаций.
     """)
     st.stop()
 
@@ -181,16 +417,21 @@ except Exception as e:
 
 with st.sidebar:
     if "form_vs_peer" in df.columns:
-        st.caption("Расчёт: peer-метрики ✓")
+        st.caption("Расчёт: сравнение с организациями аналогичной нагрузки ✓")
     else:
-        st.caption("Расчёт: peer-метрики ✗ — проверьте ветку `feature/peer-metrics-recommended-form`")
+        st.caption("Расчёт: сравнение с организациями аналогичной нагрузки ✗")
 
     st.header("Фильтры")
     filtered = df.copy()
-    for col, label in [("federal_district", "Федеральный округ"), ("region", "Регион"), ("org_type_classified", "Тип организации"), ("risk_group", "Группа риска")]:
+    for col, label in [
+        ("federal_district", "Федеральный округ"),
+        ("region", "Субъект Российской Федерации"),
+        ("org_type_classified", "Тип организации"),
+        ("risk_group", "Группа риска (расчётный показатель)"),
+    ]:
         if col in filtered.columns:
             options = sorted([x for x in filtered[col].dropna().unique()])
-            selected = st.multiselect(label, options)
+            selected = st.multiselect(label, options, format_func=display_label if col == "risk_group" else str)
             if selected:
                 filtered = filtered[filtered[col].isin(selected)]
 
@@ -199,66 +440,80 @@ ov = overview_metrics(filtered)
 st.subheader("Ключевые показатели")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    metric_card("Организаций", fmt_num(len(filtered)))
+    metric_card("Количество организаций", fmt_num(len(filtered)))
 with col2:
-    metric_card("Заполненность отчетов", pct(value_from_overview(ov, "% заполненных отчетов")))
+    metric_card("Доля заполненных отчётов", pct(value_from_overview(ov, "% заполненных отчетов")))
 with col3:
-    metric_card("СВК организован", pct(value_from_overview(ov, "% организаций, где СВК организован")))
+    metric_card("Внутренний контроль организован и осуществляется", pct(value_from_overview(ov, "% организаций, где СВК организован")))
 with col4:
-    metric_card("Полный базовый комплект", pct(value_from_overview(ov, "% организаций с полным базовым комплектом СВК")))
+    metric_card("Организация внутреннего контроля полностью формализована", pct(value_from_overview(ov, "% организаций с полным базовым комплектом СВК")))
 
 col5, col6, col7, col8 = st.columns(4)
 with col5:
-    metric_card("Полноценная методика рисков", pct(value_from_overview(ov, "% организаций с полноценной методикой оценки рисков")))
+    metric_card("Методика по выявлению и оценке рисков применяется", pct(value_from_overview(ov, "% организаций с полноценной методикой оценки рисков")))
 with col6:
-    metric_card("Регулярная оценка СВК", pct(value_from_overview(ov, "% организаций с регулярной оценкой эффективности СВК")))
+    metric_card("Регулярная оценка эффективности организации и осуществления внутреннего контроля", pct(value_from_overview(ov, "% организаций с регулярной оценкой эффективности СВК")))
 with col7:
-    metric_card("Нарушения", fmt_num(value_from_overview(ov, "Выявленные нарушения")))
+    metric_card("Количество выявленных нарушений, ед.", fmt_num(value_from_overview(ov, "Выявленные нарушения")))
 with col8:
-    metric_card("Устранено в срок", pct(value_from_overview(ov, "% нарушений, устраненных в срок")))
+    metric_card("Доля нарушений, устранённых в срок", pct(value_from_overview(ov, "% нарушений, устраненных в срок")))
 
 col9, col10, col11, col12 = st.columns(4)
 with col9:
     avg_coverage = filtered["coverage_share_active"].mean()
-    metric_card("Покрытие активных направлений", pct(avg_coverage * 100) if not pd.isna(avg_coverage) else "—")
+    metric_card("Доля активных направлений контроля, включённых в контур внутреннего контроля", pct(avg_coverage * 100) if not pd.isna(avg_coverage) else "—")
 with col10:
-    metric_card("Непокрытые направления", fmt_num(int((filtered["uncovered_active_directions_count"] > 0).sum())))
+    metric_card("Количество активных направлений контроля вне контура внутреннего контроля", fmt_num(int((filtered["uncovered_active_directions_count"] > 0).sum())))
 with col11:
-    metric_card("Слабая форма СВК", fmt_num(int((filtered["form_gap"] < 0).sum())))
+    metric_card("Форма обеспечения функционирования внутреннего контроля ниже расчётной рекомендации", fmt_num(int((filtered["form_gap"] < 0).sum())))
 with col12:
-    metric_card("Двойной риск", fmt_num(int(filtered["risk_group"].str.startswith("D.").sum())))
+    metric_card("Организации с двойным расчётным риском", fmt_num(int(filtered["risk_group"].str.startswith("D.").sum())))
 
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "Общая статистика",
-    "Зрелость СВК",
-    "Направления",
-    "Соразмерность формы",
-    "Организации в зоне риска",
-    "Качество данных",
-    "Настройки колонок",
+    "Общая информация",
+    "Зрелость ВК",
+    "Направления контроля",
+    "Соразмерность формы ВК",
+    "Группы риска",
+    "Качество отчёта",
+    "Проверка колонок",
     "Распределение 3D",
 ])
 
 with tab1:
-    st.markdown("### Общие показатели")
-    st.dataframe(ov, use_container_width=True)
+    st.markdown("### Общая организация и осуществление внутреннего контроля")
+    st.dataframe(with_display_labels(ov, ["metric"]), use_container_width=True)
 
-    st.markdown("### Нарушения и их устранение")
+    st.markdown("### Количественные показатели и работа с нарушениями")
     viol_remediation = violations_and_remediation(filtered)
     if not viol_remediation.empty:
-        fig = px.bar(viol_remediation, x="metric", y="value", text="value", title="Нарушения и их устранение")
+        viol_plot = add_wrapped_display_column(viol_remediation, "metric", width=30)
+        fig = px.bar(
+            viol_plot,
+            x="metric_display",
+            y="value",
+            text="value",
+            title=chart_title("Количественные показатели и работа с нарушениями"),
+        )
         fig.update_layout(xaxis_title="", yaxis_title="Количество")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(viol_remediation, use_container_width=True)
+        st.dataframe(with_display_labels(viol_remediation, ["metric"]), use_container_width=True)
 
     st.markdown("### Управленческие меры (планы и решения)")
     mgmt_actions = management_actions(filtered)
     if not mgmt_actions.empty:
-        fig = px.bar(mgmt_actions, x="metric", y="value", text="value", title="Планы и решения по устранению нарушений")
+        mgmt_plot = add_wrapped_display_column(mgmt_actions, "metric", width=30)
+        fig = px.bar(
+            mgmt_plot,
+            x="metric_display",
+            y="value",
+            text="value",
+            title=chart_title("Планы и решения по устранению нарушений"),
+        )
         fig.update_layout(xaxis_title="", yaxis_title="Количество")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(mgmt_actions, use_container_width=True)
+        st.dataframe(with_display_labels(mgmt_actions, ["metric"]), use_container_width=True)
 
     st.markdown("### Меры юридической ответственности")
     legal_measures = legal_responsibility_measures(filtered)
@@ -291,7 +546,7 @@ with tab1:
             y="Количество", 
             color="Тип",
             text="Количество",
-            title="Меры юридической ответственности: принято решений и результаты",
+            title=chart_title("Меры юридической ответственности: принято решений и результаты"),
             barmode="group"
         )
         fig.update_layout(xaxis_title="", yaxis_title="Количество", legend_title="")
@@ -300,70 +555,89 @@ with tab1:
         # Показываем таблицу со всеми данными включая отмены/отказы и процент отмен
         st.caption("Детализация с процентами отмен/отказов:")
         display_df = legal_measures.copy()
+        display_df = with_display_labels(display_df, ["metric"])
         # Форматируем процент отмен
         display_df["cancellation_rate_pct"] = display_df["cancellation_rate_pct"].apply(
             lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
         )
         st.dataframe(display_df, use_container_width=True)
 
-    st.markdown("### Нормированные показатели")
-    st.dataframe(normalized_activity_metrics(filtered), use_container_width=True)
+    st.markdown("### Нормированные показатели (расчётный показатель)")
+    st.dataframe(with_display_labels(normalized_activity_metrics(filtered), ["metric"]), use_container_width=True)
 
 with tab2:
-    st.markdown("### Базовые элементы СВК")
+    st.markdown("### Общая организация и осуществление внутреннего контроля")
     elems = svk_elements_summary(filtered)
     if not elems.empty:
-        fig = px.bar(elems, x="element", y="yes_orgs", text="yes_orgs", title="Наличие базовых элементов СВК")
+        elems_plot = add_wrapped_display_column(elems, "element", width=34)
+        fig = px.bar(
+            elems_plot,
+            x="element_display",
+            y="yes_orgs",
+            text="yes_orgs",
+            title=chart_title("Наличие элементов организации и осуществления внутреннего контроля"),
+        )
         fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(elems, use_container_width=True)
+        st.dataframe(with_display_labels(elems, ["element", "metric"]), use_container_width=True)
 
     left, right = st.columns(2)
     with left:
-        st.markdown("### Фактическая форма СВК, по максимальному уровню")
+        st.markdown("### Фактическая форма обеспечения функционирования внутреннего контроля")
         form_level = svk_form_level_summary(filtered)
         if not form_level.empty:
-            fig = px.bar(form_level, x="svk_form_name", y="orgs", text="orgs")
+            form_level_plot = add_wrapped_display_column(form_level, "svk_form_name", "form_name_display", width=32)
+            fig = px.bar(form_level_plot, x="form_name_display", y="orgs", text="orgs")
             fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(form_level, use_container_width=True)
+            st.dataframe(with_display_labels(form_level, ["svk_form_name"]), use_container_width=True)
     with right:
-        st.markdown("### Отмеченные формы СВК")
+        st.markdown("### Способ обеспечения функционирования внутреннего контроля")
         form_flags = svk_form_flags_summary(filtered, scoring_config)
         if not form_flags.empty:
-            fig = px.bar(form_flags, x="form", y="yes_orgs", text="yes_orgs")
+            form_flags_plot = add_wrapped_display_column(form_flags, "form", width=32)
+            fig = px.bar(form_flags_plot, x="form_display", y="yes_orgs", text="yes_orgs")
             fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(form_flags, use_container_width=True)
+            st.dataframe(with_display_labels(form_flags, ["form"]), use_container_width=True)
 
-    st.markdown("### Рискоориентированный подход")
+    st.markdown("### Риск-ориентированный подход")
     risk_m = risk_methodology_summary(filtered)
     if not risk_m.empty:
-        fig = px.bar(risk_m, x="category", y="orgs", text="orgs", title="Наличие и реализация методики оценки рисков")
+        risk_plot = add_wrapped_display_column(risk_m, "category", width=34)
+        fig = px.bar(
+            risk_plot,
+            x="category_display",
+            y="orgs",
+            text="orgs",
+            title=chart_title("Методика по выявлению и оценке рисков"),
+        )
         fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(risk_m, use_container_width=True)
+        st.dataframe(with_display_labels(risk_m, ["category"]), use_container_width=True)
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown("### Оценка эффективности СВК")
+        st.markdown("### Оценка эффективности организации и осуществления внутреннего контроля")
         eff = effectiveness_review_summary(filtered)
         if not eff.empty:
-            fig = px.bar(eff, x="category", y="orgs", text="orgs")
+            eff_plot = add_wrapped_display_column(eff, "category", width=34)
+            fig = px.bar(eff_plot, x="category_display", y="orgs", text="orgs")
             fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(eff, use_container_width=True)
+            st.dataframe(with_display_labels(eff, ["category"]), use_container_width=True)
     with col_b:
-        st.markdown("### Совершенствование СВК")
+        st.markdown("### Совершенствование организации и осуществления внутреннего контроля")
         imp = improvement_actions_summary(filtered)
         if not imp.empty:
-            fig = px.bar(imp, x="category", y="orgs", text="orgs")
+            imp_plot = add_wrapped_display_column(imp, "category", width=34)
+            fig = px.bar(imp_plot, x="category_display", y="orgs", text="orgs")
             fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(imp, use_container_width=True)
+            st.dataframe(with_display_labels(imp, ["category"]), use_container_width=True)
 
 with tab3:
-    st.markdown("### Покрытие активных направлений внутренним контролем")
+    st.markdown("### Направления контроля")
     dsum = direction_summary(filtered, scoring_config)
     if not dsum.empty:
         chart_df = dsum.melt(
@@ -372,18 +646,19 @@ with tab3:
             var_name="status",
             value_name="orgs",
         )
-        chart_df["status"] = chart_df["status"].replace({"covered_orgs": "Покрыто", "uncovered_orgs": "Не покрыто"})
-        fig = px.bar(chart_df, x="direction", y="orgs", color="status", text="orgs", barmode="stack")
-        fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
+        chart_df["status"] = chart_df["status"].map(lambda value: wrap_display_text(value, width=28))
+        chart_df["direction_display"] = chart_df["direction"].map(lambda value: wrap_display_text(value, width=28))
+        fig = px.bar(chart_df, x="direction_display", y="orgs", color="status", text="orgs", barmode="stack")
+        fig.update_layout(xaxis_title="", yaxis_title="Количество организаций", legend_title="")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(dsum, use_container_width=True)
+        st.dataframe(with_display_labels(dsum, ["direction"]), use_container_width=True)
 
 with tab4:
-    st.markdown("### Отклонение от организаций с аналогичной нагрузкой")
+    st.markdown("### Сравнение с организациями аналогичной нагрузки (расчётный показатель)")
     st.caption(
-        f"Сравнение с медианой формы СВК среди организаций с похожим профилем нагрузки "
+        f"Сравнение с медианой формы обеспечения функционирования внутреннего контроля среди организаций с похожим профилем нагрузки "
         f"(мин. группа аналогов: {peer_min_group_size} орг.; при нехватке — более грубая группировка). "
-        "Отклонение — целые уровни формы."
+        "Отклонение является расчётным аналитическим показателем, а не полем утверждённой формы мониторинга."
     )
     if "form_vs_peer" in filtered.columns:
         peer_plot = filtered.copy()
@@ -399,62 +674,82 @@ with tab4:
             x="form_vs_peer",
             y="orgs",
             text="orgs",
-            title="Распределение отклонения формы от медианы аналогов",
+            title=chart_title("Отклонение фактической формы обеспечения функционирования внутреннего контроля от медианы организаций-аналогов"),
         )
         fig.update_layout(
-            xaxis_title="Фактическая форма − медиана аналогов (уровни)",
+            xaxis_title=axis_title("Фактическая форма обеспечения функционирования внутреннего контроля − медиана организаций-аналогов (уровни)"),
             yaxis_title="Количество организаций",
         )
         st.plotly_chart(fig, use_container_width=True)
 
         if "peer_form_median" in peer_plot.columns:
             peer_plot["peer_form_median"] = peer_plot["peer_form_median"].round().astype(int)
+            peer_plot = add_wrapped_display_column(peer_plot, "risk_group", width=34)
             fig = px.scatter(
                 peer_plot,
                 x="peer_form_median",
                 y="svk_form_level",
-                color="risk_group",
+                color="risk_group_display",
                 size="peer_group_size" if "peer_group_size" in peer_plot.columns else None,
                 hover_name="org_name",
-                title="Фактическая форма vs медиана аналогов с аналогичной нагрузкой",
+                title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и медиана организаций-аналогов"),
             )
-            fig.update_layout(xaxis_title="Медиана формы у аналогов", yaxis_title="Фактическая форма")
+            fig.update_layout(
+                xaxis_title=axis_title("Медиана формы обеспечения функционирования внутреннего контроля у организаций-аналогов"),
+                yaxis_title=axis_title("Фактическая форма обеспечения функционирования внутреннего контроля"),
+                legend_title=legend_title("Группа риска (расчётный показатель)"),
+            )
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(
-            "Peer-метрики не найдены. Перезапустите приложение: "
-            "`streamlit run app.py` из ветки `feature/peer-metrics-recommended-form`."
+            "Расчётные показатели сравнения с организациями аналогичной нагрузки не найдены. "
+            "Перезапустите приложение: `streamlit run app.py`."
         )
 
-    st.markdown("### Отклонение от расчётно рекомендуемой формы СВК")
+    st.markdown("### Отклонение фактической формы обеспечения функционирования внутреннего контроля от расчётной рекомендации")
     gap_counts = filtered.groupby("form_gap", dropna=False).size().reset_index(name="orgs").sort_values("form_gap")
-    fig = px.bar(gap_counts, x="form_gap", y="orgs", text="orgs", title="Распределение отклонения от рекомендуемой формы")
-    fig.update_layout(xaxis_title="Фактическая форма − рекомендуемая форма", yaxis_title="Количество организаций")
+    fig = px.bar(
+        gap_counts,
+        x="form_gap",
+        y="orgs",
+        text="orgs",
+        title=chart_title("Отклонение фактической формы обеспечения функционирования внутреннего контроля от расчётной рекомендации"),
+    )
+    fig.update_layout(
+        xaxis_title=axis_title("Фактическая форма обеспечения функционирования внутреннего контроля − расчётная рекомендация"),
+        yaxis_title="Количество организаций",
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     scatter_cols = ["org_name", "svk_form_level", "recommended_form_level", "max_direction_load_level", "coverage_share_active", "risk_group"]
     if all(c in filtered.columns for c in scatter_cols):
+        filtered_scatter = add_wrapped_display_column(filtered, "risk_group", width=34)
         fig = px.scatter(
-            filtered,
+            filtered_scatter,
             x="recommended_form_level",
             y="svk_form_level",
-            color="risk_group",
+            color="risk_group_display",
             size="max_direction_load_level",
             hover_name="org_name",
-            title="Фактическая форма СВК vs расчётно рекомендуемая форма",
+            title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и расчётная рекомендация"),
         )
-        fig.update_layout(xaxis_title="Рекомендуемая форма", yaxis_title="Фактическая форма")
+        fig.update_layout(
+            xaxis_title=axis_title("Расчётная рекомендация по форме обеспечения функционирования внутреннего контроля"),
+            yaxis_title=axis_title("Фактическая форма обеспечения функционирования внутреннего контроля"),
+            legend_title=legend_title("Группа риска (расчётный показатель)"),
+        )
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Разрез по федеральным округам")
-    st.dataframe(by_dimension_summary(filtered, "federal_district"), use_container_width=True)
+    st.dataframe(with_display_labels(by_dimension_summary(filtered, "federal_district"), ["risk_group"]), use_container_width=True)
 
 with tab5:
-    st.markdown("### Топ организаций для управленческого внимания")
+    st.markdown("### Организации для управленческого внимания")
     top = top_risk_organizations(filtered, limit=100)
-    st.dataframe(top, use_container_width=True)
+    top_display = with_display_labels(top, ["risk_group", "svk_form_name", "recommended_form_name"])
+    st.dataframe(top_display, use_container_width=True)
     st.download_button(
-        "Скачать топ-риск CSV",
+        "Скачать список организаций для управленческого внимания CSV",
         data=top.to_csv(index=False, encoding="utf-8-sig"),
         file_name="top_risk_organizations.csv",
         mime="text/csv",
@@ -465,7 +760,8 @@ with tab6:
     st.caption("Логические несоответствия, требующие проверки и исправления")
     contradictions = contradictions_table(filtered)
     if not contradictions.empty:
-        st.dataframe(contradictions, use_container_width=True)
+        contradictions_display = with_display_labels(contradictions, ["contradictions", "issues", "risk_group", "svk_form_name"])
+        st.dataframe(contradictions_display, use_container_width=True)
         st.download_button(
             "Скачать список с противоречиями CSV",
             data=contradictions.to_csv(index=False, encoding="utf-8-sig"),
@@ -482,7 +778,8 @@ with tab6:
     st.caption("Аномальные значения и подозрительные паттерны данных")
     anomalies = anomalies_table(filtered)
     if not anomalies.empty:
-        st.dataframe(anomalies, use_container_width=True)
+        anomalies_display = with_display_labels(anomalies, ["issues", "risk_group", "svk_form_name", "recommended_form_name"])
+        st.dataframe(anomalies_display, use_container_width=True)
         st.download_button(
             "Скачать список с аномалиями CSV",
             data=anomalies.to_csv(index=False, encoding="utf-8-sig"),
@@ -495,18 +792,19 @@ with tab6:
     
     st.markdown("---")
     
-    st.markdown("### Статус отчетности")
+    st.markdown("### Статус отчётности")
     status = report_status_summary(filtered)
     if not status.empty:
-        fig = px.bar(status, x="status", y="orgs", text="orgs", title="Распределение статусов отчета")
+        status_plot = add_wrapped_display_column(status, "status", width=30)
+        fig = px.bar(status_plot, x="status_display", y="orgs", text="orgs", title=chart_title("Распределение статусов отчёта"))
         fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(status, use_container_width=True)
+        st.dataframe(with_display_labels(status, ["status"]), use_container_width=True)
 
 with tab7:
-    st.markdown("### Найденные колонки")
-    st.caption("Если в новом годовом отчете часть колонок не найдена, дополните регулярные выражения в config/columns.yml.")
-    st.dataframe(resolution_report, use_container_width=True)
+    st.markdown("### Проверка колонок отчёта")
+    st.caption("Техническая проверка сопоставления колонок загруженного отчёта с ожидаемой структурой данных.")
+    st.dataframe(with_display_text_columns(resolution_report), use_container_width=True)
     missing = resolution_report[~resolution_report["found"]]
     if len(missing):
         st.warning(f"Не найдено колонок: {len(missing)}")
@@ -521,10 +819,11 @@ with tab8:
         st.markdown("### Распределение организаций по трём осям")
         st.caption(
             "Общий вид без обработки: исходные значения суммы кассовых поступлений, "
-            "среднесписочной численности и количества фактов ФХЖ; цвет — форма СВК "
+            "среднесписочной численности и количества фактов ФХЖ; цвет — форма обеспечения функционирования внутреннего контроля "
             "(вид организации внутреннего контроля). Из-за сильного разброса большинство "
             "точек концентрируется у начала координат — это ожидаемо для «сырых» данных."
         )
+        st.caption("Пояснение: ВК — внутренний контроль; «Форма функционирования ВК» — форма обеспечения функционирования внутреннего контроля.")
         hide_extremes = st.checkbox(
             "Скрывать экстремальные значения",
             value=True,
@@ -590,6 +889,7 @@ with tab8:
             np.log10(plot_raw["fkhz_count"].where(plot_raw["fkhz_count"] > 0))
             if log_fkhz else plot_raw["fkhz_count"]
         )
+        plot_raw = add_wrapped_display_column(plot_raw, "svk_form_name", "form_name_display", width=30)
         x_title = "Кассовые поступления, lg(руб.)" if log_cash else "Кассовые поступления, руб."
         y_title = "Среднесписочная численность, lg(чел.)" if log_staff else "Среднесписочная численность"
         z_title = "Количество фактов ФХЖ, lg(ед.)" if log_fkhz else "Количество фактов ФХЖ"
@@ -598,7 +898,7 @@ with tab8:
             x="x_cash",
             y="y_staff",
             z="z_fkhz",
-            color="svk_form_name",
+            color="form_name_display",
             hover_name="org_name",
             opacity=0.7,
             color_discrete_sequence=px.colors.qualitative.Set2,
@@ -610,10 +910,10 @@ with tab8:
                 "staff_avg": ":,.0f",
                 "fkhz_count": ":,.0f",
             },
-            title="Кассовые поступления × численность × факты ФХЖ (по форме СВК)",
+            title=chart_title("Кассовые поступления × численность × факты ФХЖ (по форме обеспечения функционирования внутреннего контроля)"),
         )
         raw3d.update_layout(
-            legend_title="Форма СВК",
+            legend_title="Форма функционирования ВК",
             scene=dict(
                 xaxis=dict(title=x_title),
                 yaxis=dict(title=y_title),
@@ -638,7 +938,10 @@ with tab8:
                 ]
                 if c in extreme.columns
             ]
-            st.dataframe(extreme[ext_cols], use_container_width=True)
+            st.dataframe(
+                with_display_labels(extreme[ext_cols], ["svk_form_name", "extreme_reason"]),
+                use_container_width=True,
+            )
             st.download_button(
                 "Скачать экстремальные значения CSV",
                 data=extreme[ext_cols].to_csv(index=False, encoding="utf-8-sig"),
@@ -652,15 +955,16 @@ with tab8:
             )
 
         st.markdown("---")
-        st.markdown("### Профиль масштаба: концентрация и форма СВК")
+        st.markdown("### Профиль масштаба: концентрация и форма обеспечения функционирования внутреннего контроля")
         st.caption(
             "Ось масштаба — направление роста по трём показателям ФХД в ln(1+x)-пространстве "
             "(первая главная компонента). Отрицательные значения — мельче типичного по оси, "
             "положительные — крупнее. Графики показывают, где сосредоточены организации и как "
-            "меняется медиана формы СВК по масштабу. Карточки «типичных» показателей и вертикальная "
+            "меняется медиана формы обеспечения функционирования внутреннего контроля по масштабу. Карточки «типичных» показателей и вертикальная "
             "линия на графике — бин с максимальной концентрацией организаций. "
             "Организации без положительных значений по всем трём осям исключаются из расчёта оси и бинов."
         )
+        st.caption("Пояснение: ВК — внутренний контроль; «Медиана формы ВК» — медиана формы обеспечения функционирования внутреннего контроля.")
 
         trim_profile = st.checkbox(
             "Отсекать выбросы профиля",
@@ -802,7 +1106,7 @@ with tab8:
                 if not sp_bins_count.empty:
                     st.caption(
                         f"По бину максимальной концентрации: n={int(peak_row['n'])}, "
-                        f"медиана формы СВК {int(peak_row['form_median'])}."
+                        f"медиана формы обеспечения функционирования внутреннего контроля {int(peak_row['form_median'])}."
                     )
 
             def _sigma_label(mid: float) -> str:
@@ -841,7 +1145,7 @@ with tab8:
 
             def _bin_hover_text(row: pd.Series, low: bool) -> str:
                 lines = [
-                    f"Медиана формы: {row['form_median']:.0f} | n={int(row['n'])}",
+                    f"Медиана формы обеспечения функционирования внутреннего контроля: {row['form_median']:.0f} | n={int(row['n'])}",
                     f"Масштаб: {_scale_range_label(row['signed_scale_left'], row['signed_scale_right'])}",
                     f"Поступления: {_cash_range_label(row['cash_min'], row['cash_max'])}",
                     f"Численность: {row['staff_min']:,.0f}–{row['staff_max']:,.0f} чел",
@@ -875,9 +1179,9 @@ with tab8:
                             cmax=4,
                             opacity=bar_opacity,
                             colorbar=dict(
-                                title="Медиана формы СВК",
+                                title="Медиана формы ВК",
                                 tickvals=list(range(5)),
-                                ticktext=[_form_name(i) for i in range(5)],
+                                ticktext=[wrap_display_text(display_form_name(i), width=28) for i in range(5)],
                             ),
                         ),
                         text=[
@@ -912,13 +1216,13 @@ with tab8:
                     count_in_bin = (share_df[f"form_share_{level}"] * share_df["n"]).round(0)
                     fig_scale_share.add_trace(
                         go.Bar(
-                            name=f"{level} — {_form_name(level)}",
+                            name=f"{level} — {wrap_display_text(display_form_name(level), width=28)}",
                             x=x_pos_scale,
                             y=share_pct,
                             marker_color=_FORM_COLORS[level],
                             customdata=count_in_bin,
                             hovertemplate=(
-                                f"Форма {level}<br>"
+                                f"Форма обеспечения функционирования внутреннего контроля {level}<br>"
                                 "Доля: %{y:.1f}%<br>"
                                 "Организаций: %{customdata:.0f}"
                                 "<extra></extra>"
@@ -935,11 +1239,11 @@ with tab8:
                 )
                 fig_scale_share.update_layout(
                     barmode="stack",
-                    title="Структура форм СВК по уровням масштаба",
+                    title=chart_title("Структура форм обеспечения функционирования внутреннего контроля по уровням масштаба"),
                     xaxis=dict(title="Позиция по оси масштаба", **x_axis_scale),
                     yaxis_title="Доля организаций, %",
                     yaxis=dict(range=[0, 100]),
-                    legend_title="Форма СВК",
+                    legend_title="Форма функционирования ВК",
                     height=480,
                 )
                 st.plotly_chart(fig_scale_share, use_container_width=True)
@@ -1029,7 +1333,11 @@ with tab8:
                     bin_detail = sp_bin_orgs.loc[
                         sp_bin_orgs["bin_idx"] == selected_bin_idx, bin_detail_cols
                     ].sort_values("signed_scale")
-                    st.dataframe(bin_detail, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        with_display_labels(bin_detail, ["svk_form_name"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                     st.download_button(
                         "Скачать организации бина CSV",
                         data=bin_detail.to_csv(index=False, encoding="utf-8-sig"),
@@ -1053,7 +1361,10 @@ with tab8:
                 ]
                 if c in sp_trimmed.columns
             ]
-            st.dataframe(sp_trimmed[sp_trim_cols], use_container_width=True)
+            st.dataframe(
+                with_display_labels(sp_trimmed[sp_trim_cols], ["svk_form_name", "profile_trim_reason"]),
+                use_container_width=True,
+            )
             st.download_button(
                 "Скачать отсечённые организации CSV",
                 data=sp_trimmed[sp_trim_cols].to_csv(index=False, encoding="utf-8-sig"),
@@ -1070,14 +1381,15 @@ with tab8:
 
         st.markdown("---")
 
-        st.markdown("### Сравнение с аналогами в облаке")
+        st.markdown("### Сравнение с организациями-аналогами в облаке (расчётный показатель)")
         st.caption(
             f"Для каждой организации находятся {int(scoring_config.get('peer_benchmark', {}).get('min_group_size', 5))} "
             "ближайших соседей в пространстве ln(1+поступления), ln(1+численность), ln(1+ФХЖ). "
-            "Сравнивается фактическая форма СВК с медианой формы у соседей. "
+            "Сравнивается фактическая форма обеспечения функционирования внутреннего контроля с медианой формы у соседей. "
             "Перекос профиля показывает, по какой оси масштаб отличается от типичного у соседей; "
             "доверие к сравнению выше, когда соседи близко и их достаточно."
         )
+        st.caption("Пояснение: ВК — внутренний контроль; «Форма функционирования ВК» — форма обеспечения функционирования внутреннего контроля.")
 
         cp_full = cloud_peer_benchmark(filtered, scoring_config)
         if "org_name" in kept.columns and "org_name" in cp_full.columns:
@@ -1100,7 +1412,7 @@ with tab8:
             with c1:
                 metric_card("Организаций в анализе", fmt_num(len(cp)))
             with c2:
-                metric_card("Форма ниже соседей (надёжно)", fmt_num(len(below_peer)))
+                metric_card("Форма обеспечения функционирования внутреннего контроля ниже соседей (надёжно)", fmt_num(len(below_peer)))
             with c3:
                 metric_card("Среднее доверие к сравнению", fmt_num(avg_conf, 2) if pd.notna(avg_conf) else "—")
 
@@ -1109,7 +1421,7 @@ with tab8:
             plot_cp["log_staff"] = np.log1p(plot_cp["staff_avg"])
             plot_cp["log_fkhz"] = np.log1p(plot_cp["fkhz_count"])
 
-            st.markdown("#### 3D-облако: отклонение формы от соседей")
+            st.markdown("#### 3D-облако: отклонение формы обеспечения функционирования внутреннего контроля от соседей")
             fig3d = px.scatter_3d(
                 plot_cp,
                 x="log_cash",
@@ -1133,10 +1445,10 @@ with tab8:
                     "profile_skew_3d_axis": True,
                     "peer_3d_confidence": ":.2f",
                 },
-                title="Отклонение формы СВК от медианы ближайших соседей",
+                title=chart_title("Отклонение формы обеспечения функционирования внутреннего контроля от медианы ближайших соседей"),
             )
             fig3d.update_layout(
-                coloraxis_colorbar_title="Форма − медиана соседей",
+                coloraxis_colorbar_title="Форма функционирования ВК",
                 scene=dict(
                     xaxis_title="ln(1+кассовые поступления)",
                     yaxis_title="ln(1+численность)",
@@ -1195,7 +1507,7 @@ with tab8:
                 if neighbors:
                     st.caption(f"Соседей: {len(neighbors)} — {', '.join(neighbors[:5])}" + (" …" if len(neighbors) > 5 else ""))
 
-            st.markdown("#### Фактическая форма vs медиана соседей")
+            st.markdown("#### Фактическая форма обеспечения функционирования внутреннего контроля и медиана соседей")
             peer_scatter = cp.dropna(subset=["peer_3d_form_median", "svk_form_level"]).copy()
             if not peer_scatter.empty:
                 fig_peer = px.scatter(
@@ -1208,11 +1520,11 @@ with tab8:
                     size="peer_3d_confidence",
                     size_max=18,
                     hover_name="org_name",
-                    title="Фактическая форма vs медиана ближайших соседей",
+                    title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и медиана ближайших соседей"),
                 )
                 fig_peer.update_layout(
-                    xaxis_title="Медиана формы у соседей (0–4)",
-                    yaxis_title="Фактическая форма СВК (0–4)",
+                    xaxis_title=axis_title("Медиана формы обеспечения функционирования внутреннего контроля у соседей (0–4)"),
+                    yaxis_title=axis_title("Фактическая форма обеспечения функционирования внутреннего контроля (0–4)"),
                 )
                 max_level = max(4, int(peer_scatter["svk_form_level"].max()), int(peer_scatter["peer_3d_form_median"].max()))
                 fig_peer.add_shape(
@@ -1226,16 +1538,17 @@ with tab8:
                 )
                 st.plotly_chart(fig_peer, use_container_width=True)
 
-            st.markdown("#### Организации с формой ниже соседей")
+            st.markdown("#### Организации с формой обеспечения функционирования внутреннего контроля ниже соседей")
             priority_tab = cloud_peer_benchmark_table(filtered, scoring_config)
             if priority_tab.empty:
                 st.success("В текущей выборке приоритетных отклонений не обнаружено.")
             else:
-                st.dataframe(priority_tab, use_container_width=True)
+                priority_display = with_display_labels(priority_tab, ["svk_form_name", "recommended_form_name", "risk_group"])
+                st.dataframe(priority_display, use_container_width=True)
                 st.download_button(
-                    "Скачать peer-3D CSV",
+                    "Скачать расчёт сравнения 3D CSV",
                     data=cp_full.to_csv(index=False, encoding="utf-8-sig"),
                     file_name="cloud_peer_3d.csv",
                     mime="text/csv",
                 )
-                st.info(f"Найдено организаций с формой ниже соседей (надёжное сравнение): {len(priority_tab)}")
+                st.info(f"Найдено организаций с формой обеспечения функционирования внутреннего контроля ниже соседей (надёжное сравнение): {len(priority_tab)}")

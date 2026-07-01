@@ -43,6 +43,7 @@ from src.svk_analytics.summaries import (
     risk_methodology_summary,
     svk_elements_summary,
     svk_form_flags_summary,
+    svk_form_level_activity_summary,
     svk_form_level_summary,
     top_risk_organizations,
     violations_and_remediation,
@@ -388,19 +389,6 @@ if not input_path:
     - `.XLSX` (новый формат Excel)
     - `.HTML` / `.HTM` (экспорт из веб-форм)
     
-    #### Что вы получите:
-    - 📈 **12 ключевых показателей** организации и осуществления внутреннего контроля
-    - 📊 **8 интерактивных вкладок** с детальной аналитикой
-    - 🔍 **Автоматическое выявление** противоречий и аномалий в данных
-    - 🎯 **Организации для управленческого внимания**
-    - 📥 **Экспорт результатов** в CSV
-    
-    #### Направления контроля:
-    1. Финансово-хозяйственная деятельность
-    2. Деятельность по закупкам
-    3. Использование и распоряжение имуществом
-    4. Проектная деятельность
-    
     ---
     
     💡 **Совет:** После загрузки файла используйте фильтры в боковой панели для детального анализа по федеральным округам, субъектам Российской Федерации и типам организаций.
@@ -463,7 +451,7 @@ with col9:
     avg_coverage = filtered["coverage_share_active"].mean()
     metric_card("Доля активных направлений контроля, включённых в контур внутреннего контроля", pct(avg_coverage * 100) if not pd.isna(avg_coverage) else "—")
 with col10:
-    metric_card("Количество активных направлений контроля вне контура внутреннего контроля", fmt_num(int((filtered["uncovered_active_directions_count"] > 0).sum())))
+    metric_card("Организации с непокрытыми активными направлениями", fmt_num(int((filtered["uncovered_active_directions_count"] > 0).sum())))
 with col11:
     metric_card("Форма обеспечения функционирования внутреннего контроля ниже расчётной рекомендации", fmt_num(int((filtered["form_gap"] < 0).sum())))
 with col12:
@@ -585,12 +573,52 @@ with tab2:
     with left:
         st.markdown("### Фактическая форма обеспечения функционирования внутреннего контроля")
         form_level = svk_form_level_summary(filtered)
+        form_level_activity = svk_form_level_activity_summary(filtered)
         if not form_level.empty:
             form_level_plot = add_wrapped_display_column(form_level, "svk_form_name", "form_name_display", width=32)
             fig = px.bar(form_level_plot, x="form_name_display", y="orgs", text="orgs")
             fig.update_layout(xaxis_title="", yaxis_title="Количество организаций")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(with_display_labels(form_level, ["svk_form_name"]), use_container_width=True)
+
+            if not form_level_activity.empty:
+                display_act = with_display_labels(form_level_activity, ["svk_form_name"]).copy()
+
+                # Форматируем процентные столбцы
+                for pct_col in ["cancelled_decisions_rate_pct", "returned_refused_rate_pct", "refused_satisfaction_rate_pct"]:
+                    if pct_col in display_act.columns:
+                        display_act[pct_col] = display_act[pct_col].apply(
+                            lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
+                        )
+                if "violations_per_org" in display_act.columns:
+                    display_act["violations_per_org"] = display_act["violations_per_org"].apply(
+                        lambda x: f"{x:.1f}" if pd.notna(x) else "—"
+                    )
+                if "percent_filled" in display_act.columns:
+                    display_act["percent_filled"] = display_act["percent_filled"].apply(
+                        lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
+                    )
+
+                rename_map = {
+                    "orgs": "Организаций",
+                    "percent_filled": "% от заполн.",
+                    "violations_total": "Нарушений",
+                    "violations_per_org": "Нарушений на орг.",
+                    "disciplinary_decisions": "Дисципл. взыскания",
+                    "cancelled_decisions": "из них отменены",
+                    "cancelled_decisions_rate_pct": "% отмен (дисципл.)",
+                    "materials_law_enforcement": "В правоохр. органы",
+                    "returned_refused": "из них отказы (правоохр.)",
+                    "returned_refused_rate_pct": "% отказов (правоохр.)",
+                    "materials_court": "В суд",
+                    "refused_satisfaction": "из них отказы (суд)",
+                    "refused_satisfaction_rate_pct": "% отказов (суд)",
+                }
+                display_act = display_act.rename(columns={k: v for k, v in rename_map.items() if k in display_act.columns})
+
+                st.caption("Нарушения и меры реагирования по форме обеспечения функционирования внутреннего контроля:")
+                st.dataframe(display_act, use_container_width=True)
+            else:
+                st.dataframe(with_display_labels(form_level, ["svk_form_name"]), use_container_width=True)
     with right:
         st.markdown("### Способ обеспечения функционирования внутреннего контроля")
         form_flags = svk_form_flags_summary(filtered, scoring_config)
@@ -1345,6 +1373,67 @@ with tab8:
                         mime="text/csv",
                         key="sp_bin_orgs_csv",
                     )
+
+                    # --- Агрегация по формам внутри выбранного бина ---
+                    _bin_metric_cols = [
+                        c for c in [
+                            "violations_total",
+                            "disciplinary_decisions",
+                            "cancelled_decisions",
+                            "materials_law_enforcement",
+                            "returned_refused",
+                            "materials_court",
+                            "refused_satisfaction",
+                        ]
+                        if c in sp_bin_orgs.columns
+                    ]
+                    _bin_full = sp_bin_orgs.loc[sp_bin_orgs["bin_idx"] == selected_bin_idx].copy()
+                    if _bin_metric_cols and "svk_form_name" in _bin_full.columns:
+                        for _c in _bin_metric_cols:
+                            _bin_full[_c] = pd.to_numeric(_bin_full[_c], errors="coerce").fillna(0)
+
+                        _form_agg = (
+                            _bin_full.groupby("svk_form_name", dropna=False)
+                            .agg(
+                                **{"Организаций": pd.NamedAgg("svk_form_name", "count")},
+                                **{_c: pd.NamedAgg(_c, "sum") for _c in _bin_metric_cols},
+                            )
+                            .reset_index()
+                            .sort_values("Организаций", ascending=False)
+                        )
+
+                        if "violations_total" in _form_agg.columns:
+                            _form_agg["Нарушений на орг."] = (
+                                _form_agg["violations_total"]
+                                / _form_agg["Организаций"].replace(0, np.nan)
+                            ).apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+
+                        for _num, _den, _col in [
+                            ("cancelled_decisions", "disciplinary_decisions", "% отмен (дисципл.)"),
+                            ("returned_refused", "materials_law_enforcement", "% отказов (правоохр.)"),
+                            ("refused_satisfaction", "materials_court", "% отказов (суд)"),
+                        ]:
+                            if _num in _form_agg.columns and _den in _form_agg.columns:
+                                _form_agg[_col] = (
+                                    _form_agg[_num] / _form_agg[_den].replace(0, np.nan) * 100
+                                ).apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+
+                        _bin_rename = {
+                            "svk_form_name": "Форма ВК",
+                            "violations_total": "Нарушений",
+                            "disciplinary_decisions": "Дисципл. взыскания",
+                            "cancelled_decisions": "из них отменены",
+                            "materials_law_enforcement": "В правоохр. органы",
+                            "returned_refused": "из них отказы (правоохр.)",
+                            "materials_court": "В суд",
+                            "refused_satisfaction": "из них отказы (суд)",
+                        }
+                        _form_agg = _form_agg.rename(
+                            columns={k: v for k, v in _bin_rename.items() if k in _form_agg.columns}
+                        )
+
+                        st.caption("Формы ВК в бине и их результативность:")
+                        st.dataframe(_form_agg, use_container_width=True, hide_index=True)
 
         if trim_profile and not sp_trimmed.empty:
             st.markdown("#### Отсечённые организации — вынесены на проверку")

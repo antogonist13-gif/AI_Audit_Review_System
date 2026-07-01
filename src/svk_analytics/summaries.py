@@ -185,6 +185,53 @@ def svk_form_level_summary(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def svk_form_level_activity_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Распределение организаций по максимальной форме СВК с агрегатами нарушений
+    и мер реагирования (дисциплинарные, правоохранительные органы, суд)."""
+    base = _filled_df(df)
+    if "svk_form_level" not in base.columns:
+        return pd.DataFrame()
+
+    metric_cols = [
+        "violations_total",
+        "disciplinary_decisions",
+        "cancelled_decisions",
+        "materials_law_enforcement",
+        "returned_refused",
+        "materials_court",
+        "refused_satisfaction",
+    ]
+
+    work = base[["svk_form_level", "svk_form_name"]].copy()
+    for col in metric_cols:
+        work[col] = _safe_num(base, col).fillna(0)
+
+    out = (
+        work.groupby(["svk_form_level", "svk_form_name"], dropna=False)
+        .agg(
+            orgs=pd.NamedAgg("svk_form_level", "count"),
+            **{c: pd.NamedAgg(c, "sum") for c in metric_cols},
+        )
+        .reset_index()
+        .sort_values("svk_form_level")
+    )
+
+    total_orgs = len(base)
+    out["percent_filled"] = (out["orgs"] / total_orgs * 100) if total_orgs else np.nan
+    out["violations_per_org"] = out["violations_total"] / out["orgs"].replace(0, np.nan)
+
+    for numerator, denominator in [
+        ("cancelled_decisions", "disciplinary_decisions"),
+        ("returned_refused", "materials_law_enforcement"),
+        ("refused_satisfaction", "materials_court"),
+    ]:
+        out[f"{numerator}_rate_pct"] = (
+            out[numerator] / out[denominator].replace(0, np.nan) * 100
+        )
+
+    return out
+
+
 def _classified_summary(df: pd.DataFrame, column: str, classifier: Callable[[Any], str]) -> pd.DataFrame:
     base = _filled_df(df)
     if column not in base.columns:
@@ -1133,6 +1180,13 @@ def _build_scale_bin_orgs(
         "fkhz_count",
         "svk_form_level",
         "svk_form_name",
+        "violations_total",
+        "disciplinary_decisions",
+        "cancelled_decisions",
+        "materials_law_enforcement",
+        "returned_refused",
+        "materials_court",
+        "refused_satisfaction",
     ]
     present = [c for c in out_cols if c in merged.columns]
     out = merged[present].sort_values(

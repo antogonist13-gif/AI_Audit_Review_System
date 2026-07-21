@@ -35,6 +35,17 @@ def _pct(numerator: float, denominator: float) -> float | None:
     return float(numerator / denominator)
 
 
+def _safe_float(value: Any) -> float | None:
+    if value is None or (isinstance(value, (float, np.floating)) and pd.isna(value)):
+        return None
+    if pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _money_bln(value: float | int | None) -> float | None:
     if value is None or pd.isna(value):
         return None
@@ -472,8 +483,16 @@ def overview_metrics(df: pd.DataFrame) -> pd.DataFrame:
     regular_eff = int(effectiveness.loc[effectiveness["category"] == "Регулярная оценка", "orgs"].sum()) if not effectiveness.empty else None
 
     viol = violations_summary(df)
-    total_violations = float(viol.loc[viol["metric"] == "Выявленные нарушения", "value"].iloc[0]) if not viol.empty else None
-    fixed_on_time_pct = float(viol.loc[viol["metric"] == "Устранено в срок", "share_of_violations"].iloc[0]) if not viol.empty else None
+    total_violations = (
+        _safe_float(viol.loc[viol["metric"] == "Выявленные нарушения", "value"].iloc[0])
+        if not viol.empty and (viol["metric"] == "Выявленные нарушения").any()
+        else None
+    )
+    fixed_on_time_pct = (
+        _safe_float(viol.loc[viol["metric"] == "Устранено в срок", "share_of_violations"].iloc[0])
+        if not viol.empty and (viol["metric"] == "Устранено в срок").any()
+        else None
+    )
     # Конвертируем в проценты если это доля
     if fixed_on_time_pct is not None and fixed_on_time_pct <= 1.0:
         fixed_on_time_pct = fixed_on_time_pct * 100

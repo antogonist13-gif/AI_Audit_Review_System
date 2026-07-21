@@ -88,6 +88,11 @@ def pct(x):
     return f"{x:.1f}%"
 
 
+def plotly_hover_name(df: pd.DataFrame) -> str | None:
+    """Use org_name for hover only when the column exists (bad Excel parses omit it)."""
+    return "org_name" if "org_name" in df.columns else None
+
+
 def fmt_num(x, digits: int = 0):
     if x is None or pd.isna(x):
         return "—"
@@ -346,6 +351,10 @@ with st.sidebar:
     uploaded = st.file_uploader("Загрузите отчёт мониторинга", type=["xls", "xlsx", "html", "htm"])
 
     if uploaded is not None:
+        upload_key = f"{uploaded.name}:{uploaded.size}"
+        if st.session_state.get("_upload_key") != upload_key:
+            st.cache_data.clear()
+            st.session_state["_upload_key"] = upload_key
         suffix = Path(uploaded.name).suffix or ".xls"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tmp.write(uploaded.getvalue())
@@ -719,7 +728,7 @@ with tab4:
                 y="svk_form_level",
                 color="risk_group_display",
                 size="peer_group_size" if "peer_group_size" in peer_plot.columns else None,
-                hover_name="org_name",
+                hover_name=plotly_hover_name(peer_plot),
                 title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и медиана организаций-аналогов"),
             )
             fig.update_layout(
@@ -758,7 +767,7 @@ with tab4:
             y="svk_form_level",
             color="risk_group_display",
             size="max_direction_load_level",
-            hover_name="org_name",
+            hover_name=plotly_hover_name(filtered_scatter),
             title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и расчётная рекомендация"),
         )
         fig.update_layout(
@@ -927,7 +936,7 @@ with tab8:
             y="y_staff",
             z="z_fkhz",
             color="form_name_display",
-            hover_name="org_name",
+            hover_name=plotly_hover_name(plot_raw),
             opacity=0.7,
             color_discrete_sequence=px.colors.qualitative.Set2,
             hover_data={
@@ -1520,7 +1529,7 @@ with tab8:
                 color_continuous_scale="RdBu_r",
                 color_continuous_midpoint=0,
                 opacity=0.8,
-                hover_name="org_name",
+                hover_name=plotly_hover_name(plot_cp),
                 hover_data={
                     "log_cash": False,
                     "log_staff": False,
@@ -1581,7 +1590,7 @@ with tab8:
                         "Прочие": "#bdbdbd",
                     },
                     opacity=0.85,
-                    hover_name="org_name",
+                    hover_name=plotly_hover_name(hi),
                     title=f"Соседи в облаке: {selected_org}",
                 )
                 fig_hi.update_layout(
@@ -1608,7 +1617,7 @@ with tab8:
                     color_continuous_midpoint=0,
                     size="peer_3d_confidence",
                     size_max=18,
-                    hover_name="org_name",
+                    hover_name=plotly_hover_name(peer_scatter),
                     title=chart_title("Фактическая форма обеспечения функционирования внутреннего контроля и медиана ближайших соседей"),
                 )
                 fig_peer.update_layout(

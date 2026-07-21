@@ -4,5 +4,6 @@ streamlit>=1.35
 plotly>=5.20
 PyYAML>=6.0
 openpyxl>=3.1
+xlrd>=2.0.1
 lxml>=5.0
 beautifulsoup4>=4.12

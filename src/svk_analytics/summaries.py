@@ -872,7 +872,7 @@ def split_extreme_values(
         parts: list[str] = []
         for col, label in ANOMALY_AXES:
             t = thresholds.get(col)
-            v = row.get(col)
+            v = pd.to_numeric(row.get(col), errors="coerce")
             if t is None or pd.isna(t) or pd.isna(v) or v <= t:
                 continue
             ratio = (v / t) if t else float("inf")
@@ -932,7 +932,7 @@ def split_profile_outliers(
         for col, label in ANOMALY_AXES:
             lo = low_thresholds.get(col)
             hi = high_thresholds.get(col)
-            v = row.get(col)
+            v = pd.to_numeric(row.get(col), errors="coerce")
             if lo is None or hi is None or pd.isna(v):
                 continue
             if v < lo:

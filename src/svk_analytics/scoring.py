@@ -196,6 +196,9 @@ def enrich_with_metrics(df: pd.DataFrame, scoring_config: dict[str, Any], year: 
         for metric in metrics:
             values = _safe_num(out, metric)
             out[f"{metric}__num"] = values
+            # Excel/openpyxl often leaves numeric cells as strings; normalize
+            # the canonical metric column so downstream charts match HTML loads.
+            out[metric] = values
             metric_values.append(values)
             metric_scores.append(_percentile_scores(values))
 

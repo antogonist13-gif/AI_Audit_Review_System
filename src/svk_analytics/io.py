@@ -35,7 +35,12 @@ def _excel_engine(path: Path) -> str | None:
     if magic.startswith(b"PK"):
         return "openpyxl"
     if magic.startswith(b"\xd0\xcf\x11\xe0"):
-        return "xlrd"
+        try:
+            import xlrd  # noqa: F401
+
+            return "xlrd"
+        except ImportError:
+            return None
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
         return "openpyxl"
